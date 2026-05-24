@@ -135,4 +135,19 @@ router.get('/exchangeRate/:id', async (req, res) => {
     }
 });
 
+// Endpoint to fetch exchange rates from Frankfurter API (server-side to avoid CORS issues)
+router.get('/exchangeRate/fetch/latest', async (req, res) => {
+    try {
+        const response = await fetch('https://api.frankfurter.app/latest?from=EUR&to=INR,USD,GBP,JPY,CAD,AUD,CHF,CNY');
+        if (!response.ok) {
+            throw new Error(`Frankfurter API error: ${response.statusText}`);
+        }
+        const data = await response.json();
+        res.json(data);
+    } catch (error) {
+        console.error('Error fetching from Frankfurter API:', error);
+        res.status(500).json({ error: 'Failed to fetch exchange rate from Frankfurter API', details: error.message });
+    }
+});
+
 export default router;
