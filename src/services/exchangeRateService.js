@@ -1,10 +1,12 @@
-// Exchange Rate Service - Fetch EUR to INR conversion using local JSON server
-const API_URL = import.meta.env.VITE_API_URL || '';
+// Exchange Rate Service - Fetch EUR to INR conversion using backend
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3002/api';
 
 const getHeaders = () => {
     const token = localStorage.getItem('token');
     return token ? { 'Authorization': `Bearer ${token}` } : {};
 };
+
+console.log('[exchangeRateService] Using API_URL:', API_URL);
 
 export const exchangeRateService = {
     async fetchExchangeRate(forceRefresh = false) {
@@ -23,10 +25,12 @@ export const exchangeRateService = {
     },
 
     async getCachedRate() {
-        return this.fetchExchangeRate();
+        // Always fetch fresh data - don't use cache
+        return this.fetchExchangeRate(true);
     },
 
     async getOrFetchRate() {
-        return this.fetchExchangeRate();
+        // Always fetch fresh data on initial load
+        return this.fetchExchangeRate(true);
     },
 };

@@ -99,10 +99,7 @@ router.get('/exchangeRate/:id', async (req, res) => {
                 const response = await fetch('https://api.frankfurter.dev/v2/rates?base=EUR&quotes=INR,USD,GBP,JPY,CAD,AUD,CHF,CNY');
                 if (response.ok) {
                     const parsedData = await response.json();
-                    const baseRates = {};
-                    parsedData.forEach(item => {
-                        baseRates[item.quote] = item.rate;
-                    });
+                    const baseRates = parsedData.rates;
                     const rate = baseRates.INR;
                     const rates = {
                         EUR: baseRates.INR,
@@ -135,21 +132,6 @@ router.get('/exchangeRate/:id', async (req, res) => {
         res.json({ id: rateDoc.id, rate: rateDoc.rate, rates: rateDoc.rates, timestamp: rateDoc.timestamp, lastFetched: rateDoc.lastFetched });
     } catch (error) {
         res.status(500).json({ error: 'Failed to handle exchange rate' });
-    }
-});
-
-// Endpoint to fetch exchange rates from Frankfurter API (server-side to avoid CORS issues)
-router.get('/exchangeRate/fetch/latest', async (req, res) => {
-    try {
-        const response = await fetch('https://api.frankfurter.dev/v2/rates?base=EUR&quotes=INR,USD,GBP,JPY,CAD,AUD,CHF,CNY');
-        if (!response.ok) {
-            throw new Error(`Frankfurter API error: ${response.statusText}`);
-        }
-        const data = await response.json();
-        res.json(data);
-    } catch (error) {
-        console.error('Error fetching from Frankfurter API:', error);
-        res.status(500).json({ error: 'Failed to fetch exchange rate from Frankfurter API', details: error.message });
     }
 });
 
