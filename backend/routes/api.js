@@ -1,0 +1,113 @@
+import express from 'express';
+import { Asset } from '../models/Asset.js';
+import { Expense } from '../models/Expense.js';
+import { Lending } from '../models/Lending.js';
+import { auth } from '../middleware/auth.js';
+import { ExchangeRate } from '../models/ExchangeRate.js';
+
+const router = express.Router();
+
+router.use(auth); // Protect all API routes
+
+// Helper to format ID
+const formatDoc = (doc) => ({ ...doc.toObject(), id: doc._id.toString(), _id: undefined, userId: undefined, __v: undefined });
+
+// --- Assets ---
+router.get('/assets', async (req, res) => {
+    const assets = await Asset.find({ userId: req.userId });
+    res.json(assets.map(formatDoc));
+});
+
+router.post('/assets', async (req, res) => {
+    const asset = new Asset({ ...req.body, userId: req.userId });
+    await asset.save();
+    res.status(201).json(formatDoc(asset));
+});
+
+router.patch('/assets/:id', async (req, res) => {
+    const asset = await Asset.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
+    if (!asset) return res.status(404).send();
+    res.json(formatDoc(asset));
+});
+
+router.delete('/assets/:id', async (req, res) => {
+    const asset = await Asset.findOneAndDelete({ _id: req.params.id, userId: req.userId });
+    if (!asset) return res.status(404).send();
+    res.status(204).send();
+});
+
+// --- Expenses ---
+router.get('/expenses', async (req, res) => {
+    const expenses = await Expense.find({ userId: req.userId });
+    res.json(expenses.map(formatDoc));
+});
+
+router.post('/expenses', async (req, res) => {
+    const expense = new Expense({ ...req.body, userId: req.userId });
+    await expense.save();
+    res.status(201).json(formatDoc(expense));
+});
+
+router.patch('/expenses/:id', async (req, res) => {
+    const expense = await Expense.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
+    if (!expense) return res.status(404).send();
+    res.json(formatDoc(expense));
+});
+
+router.delete('/expenses/:id', async (req, res) => {
+    const expense = await Expense.findOneAndDelete({ _id: req.params.id, userId: req.userId });
+    if (!expense) return res.status(404).send();
+    res.status(204).send();
+});
+
+// --- Lendings ---
+router.get('/lendings', async (req, res) => {
+    const lendings = await Lending.find({ userId: req.userId });
+    res.json(lendings.map(formatDoc));
+});
+
+router.post('/lendings', async (req, res) => {
+    const lending = new Lending({ ...req.body, userId: req.userId });
+    await lending.save();
+    res.status(201).json(formatDoc(lending));
+});
+
+router.patch('/lendings/:id', async (req, res) => {
+    const lending = await Lending.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
+    if (!lending) return res.status(404).send();
+    res.json(formatDoc(lending));
+});
+
+router.delete('/lendings/:id', async (req, res) => {
+    const lending = await Lending.findOneAndDelete({ _id: req.params.id, userId: req.userId });
+    if (!lending) return res.status(404).send();
+    res.status(204).send();
+});
+
+router.get('/exchangeRate/:id', async (req, res) => {
+    try {
+        let rateDoc = await ExchangeRate.findOne({ id: req.params.id });
+        if (!rateDoc) {
+            return res.json({ id: req.params.id, rate: 103.5, rates: { EUR: 103.5, USD: 83.2, GBP: 105.1 }, timestamp: new Date().toISOString() });
+        }
+        res.json({ id: rateDoc.id, rate: rateDoc.rate, rates: rateDoc.rates, timestamp: rateDoc.timestamp, lastFetched: rateDoc.lastFetched });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch exchange rate' });
+    }
+});
+
+router.patch('/exchangeRate/:id', async (req, res) => {
+    try {
+        const { rate, rates, timestamp, lastFetched } = req.body;
+        const rateDoc = await ExchangeRate.findOneAndUpdate(
+            { id: req.params.id },
+            { rate, rates, timestamp, lastFetched: lastFetched || timestamp },
+            { new: true, upsert: true } // upsert automatically creates the row if it doesn't exist
+        );
+        res.json({ id: rateDoc.id, rate: rateDoc.rate, rates: rateDoc.rates, timestamp: rateDoc.timestamp, lastFetched: rateDoc.lastFetched });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update exchange rate' });
+    }
+});
+
+export default router;

@@ -1,0 +1,28 @@
+{
+    "name": "spending-tracker",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "dev": "vite",
+        "dev:all": "concurrently \"npm run dev\" \"cd backend && npm run dev\"",
+        "build": "vite build",
+        "preview": "vite preview"
+    },
+    "dependencies": {
+        "axios": "^1.16.1",
+        "lucide-react": "^0.263.1",
+        "react": "^18.2.0",
+        "react-dom": "^18.2.0",
+        "react-router-dom": "^6.23.1",
+        "recharts": "^3.8.1"
+    },
+    "devDependencies": {
+        "@vitejs/plugin-react": "^4.0.3",
+        "autoprefixer": "^10.4.14",
+        "concurrently": "^8.2.2",
+        "postcss": "^8.4.27",
+        "tailwindcss": "^3.3.3",
+        "vite": "^5.0.2"
+    }
+}
