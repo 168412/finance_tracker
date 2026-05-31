@@ -96,23 +96,14 @@ router.get('/exchangeRate/:id', async (req, res) => {
         // Fetch from Frankfurter if forcing refresh, no data exists, or cache expired
         if (!rateDoc || forceRefresh || (now - lastFetchedTime > CACHE_DURATION)) {
             try {
-                const response = await fetch('https://api.frankfurter.dev/v2/rates?base=EUR&quotes=INR,USD,GBP,JPY,CAD,AUD,CHF,CNY');
+                const response = await fetch('https://api.frankfurter.dev/v1/latest?base=EUR&symbols=INR,USD,GBP,JPY,CAD,AUD,CHF,CNY,IDR');
                 if (response.ok) {
                     const parsedData = await response.json();
-                    const baseRates = {};
-                    parsedData.forEach(item => {
-                        baseRates[item.quote] = item.rate;
-                    });
+                    const baseRates = parsedData.rates;
                     const rate = baseRates.INR;
                     const rates = {
-                        EUR: baseRates.INR,
-                        USD: baseRates.INR / baseRates.USD,
-                        GBP: baseRates.INR / baseRates.GBP,
-                        CAD: baseRates.INR / baseRates.CAD,
-                        AUD: baseRates.INR / baseRates.AUD,
-                        CHF: baseRates.INR / baseRates.CHF,
-                        JPY: baseRates.INR / baseRates.JPY,
-                        CNY: baseRates.INR / baseRates.CNY,
+                        ...baseRates,
+                        EUR: 1
                     };
                     const timestamp = new Date().toISOString();
 
@@ -141,12 +132,18 @@ router.get('/exchangeRate/:id', async (req, res) => {
 // Endpoint to fetch exchange rates from Frankfurter API (server-side to avoid CORS issues)
 router.get('/exchangeRate/fetch/latest', async (req, res) => {
     try {
-        const response = await fetch('https://api.frankfurter.dev/v2/rates?base=EUR&quotes=INR,USD,GBP,JPY,CAD,AUD,CHF,CNY');
+        const response = await fetch('https://api.frankfurter.dev/v1/latest?base=EUR&symbols=INR,USD,GBP,JPY,CAD,AUD,CHF,CNY');
         if (!response.ok) {
             throw new Error(`Frankfurter API error: ${response.statusText}`);
         }
         const data = await response.json();
-        res.json(data);
+        const baseRates = data.rates;
+        const rate = baseRates.INR;
+        const rates = {
+            ...baseRates,
+            EUR: 1
+        };
+        res.json({ rate, rates, timestamp: new Date().toISOString() });
     } catch (error) {
         console.error('Error fetching from Frankfurter API:', error);
         res.status(500).json({ error: 'Failed to fetch exchange rate from Frankfurter API', details: error.message });

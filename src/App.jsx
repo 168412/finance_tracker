@@ -42,10 +42,14 @@ function App() {
             if (sourceAssetId) {
                 const sourceAsset = assets.find(a => a.id === sourceAssetId);
                 if (sourceAsset) {
-                    // Convert back to asset's original currency if needed
-                    const deduction = sourceAsset.currency === 'EUR' ? expenseData.amount :
-                        sourceAsset.currency === 'INR' ? (expenseData.amount * rate) :
-                            (rates[sourceAsset.currency] ? (expenseData.amount * rate) / rates[sourceAsset.currency] : expenseData.amount);
+                    let expenseInBase = expenseData.amount;
+                    if (expenseData.currency === 'INR') expenseInBase = expenseData.amount / rate;
+                    else if (expenseData.currency && expenseData.currency !== 'EUR' && rates[expenseData.currency]) expenseInBase = expenseData.amount / rates[expenseData.currency];
+
+                    let deduction = expenseInBase;
+                    if (sourceAsset.currency === 'INR') deduction = expenseInBase * rate;
+                    else if (sourceAsset.currency !== 'EUR' && rates[sourceAsset.currency]) deduction = expenseInBase * rates[sourceAsset.currency];
+
                     const baseValue = currentAssetValue !== null ? currentAssetValue : sourceAsset.value;
                     const newAssetValue = Math.max(0, baseValue - deduction);
                     await updateAsset(sourceAssetId, { ...sourceAsset, value: parseFloat(newAssetValue.toFixed(2)) });
@@ -66,9 +70,14 @@ function App() {
             if (expenseToDelete && expenseToDelete.sourceAssetId) {
                 const sourceAsset = assets.find(a => a.id === expenseToDelete.sourceAssetId);
                 if (sourceAsset) {
-                    const refund = sourceAsset.currency === 'EUR' ? expenseToDelete.amount :
-                        sourceAsset.currency === 'INR' ? (expenseToDelete.amount * rate) :
-                            (rates[sourceAsset.currency] ? (expenseToDelete.amount * rate) / rates[sourceAsset.currency] : expenseToDelete.amount);
+                    let expenseInBase = expenseToDelete.amount;
+                    if (expenseToDelete.currency === 'INR') expenseInBase = expenseToDelete.amount / rate;
+                    else if (expenseToDelete.currency && expenseToDelete.currency !== 'EUR' && rates[expenseToDelete.currency]) expenseInBase = expenseToDelete.amount / rates[expenseToDelete.currency];
+
+                    let refund = expenseInBase;
+                    if (sourceAsset.currency === 'INR') refund = expenseInBase * rate;
+                    else if (sourceAsset.currency !== 'EUR' && rates[sourceAsset.currency]) refund = expenseInBase * rates[sourceAsset.currency];
+
                     const newAssetValue = sourceAsset.value + refund;
                     await updateAsset(sourceAsset.id, { ...sourceAsset, value: parseFloat(newAssetValue.toFixed(2)) });
                 }

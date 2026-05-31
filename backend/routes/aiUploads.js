@@ -74,7 +74,7 @@ router.post('/scan-receipt', upload.single('receipt'), async (req, res) => {
 
         const categories = JSON.parse(req.body.categories || '[]');
 
-        const prompt = `Analyze this receipt. Extract the total amount, currency (EUR or INR), date (YYYY-MM-DD), merchant name/notes, and categorize it into one of these: ${categories.join(', ')}. Respond ONLY with a valid JSON object like this: {"amount": 25.50, "currency": "EUR", "date": "2024-03-15", "category": "Food", "notes": "Starbucks"}`;
+        const prompt = `Analyze this receipt. Extract the total amount, currency (e.g. EUR, USD, INR), date (YYYY-MM-DD), merchant name/notes, and categorize it into one of these: ${categories.join(', ')}. If it is a grocery or retail bill with individual items, extract the list of items purchased as well with their name and price. Respond ONLY with a valid JSON object like this: {"amount": 25.50, "currency": "EUR", "date": "2024-03-15", "category": "Grocery", "notes": "Walmart", "items": [{"name": "Milk", "price": "2.50"}, {"name": "Bread", "price": "1.50"}]}`;
 
         let responseText = await generateAIContent(prompt, req.file.path, req.file.mimetype);
         responseText = responseText.trim();

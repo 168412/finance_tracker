@@ -8,6 +8,11 @@ const expenseSchema = new mongoose.Schema({
     date: { type: Date, required: true },
     currency: { type: String, default: 'EUR' },
     sourceAssetId: { type: String },
+    items: [{
+        id: String,
+        name: String,
+        price: Number
+    }],
     createdAt: { type: Date, default: Date.now }
 });
 

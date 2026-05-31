@@ -81,7 +81,10 @@ router.post('/signup', async (req, res) => {
                 username: user.username,
                 email: user.email,
                 firstName: user.firstName,
-                lastName: user.lastName
+                lastName: user.lastName,
+                defaultCurrency: user.defaultCurrency,
+                currencyMode: user.currencyMode,
+                secondaryCurrency: user.secondaryCurrency
             }
         });
     } catch (error) {
@@ -133,7 +136,10 @@ router.post('/login', async (req, res) => {
                 username: user.username,
                 email: user.email,
                 firstName: user.firstName,
-                lastName: user.lastName
+                lastName: user.lastName,
+                defaultCurrency: user.defaultCurrency,
+                currencyMode: user.currencyMode,
+                secondaryCurrency: user.secondaryCurrency
             }
         });
     } catch (error) {
@@ -159,20 +165,34 @@ router.get('/me', auth, async (req, res) => {
 // ========== UPDATE USER PROFILE ROUTE ==========
 router.patch('/profile', auth, async (req, res) => {
     try {
-        const { firstName, lastName, defaultCurrency } = req.body;
+        const { firstName, lastName, defaultCurrency, currencyMode, secondaryCurrency } = req.body;
 
         const user = await User.findById(req.userId);
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
 
+        const validCurrencies = ['EUR', 'INR', 'USD', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY', 'IDR'];
+
         if (firstName !== undefined) user.firstName = firstName;
         if (lastName !== undefined) user.lastName = lastName;
         if (defaultCurrency !== undefined) {
-            if (!['EUR', 'INR', 'USD', 'GBP'].includes(defaultCurrency)) {
+            if (!validCurrencies.includes(defaultCurrency)) {
                 return res.status(400).json({ error: 'Invalid currency' });
             }
             user.defaultCurrency = defaultCurrency;
+        }
+        if (currencyMode !== undefined) {
+            if (!['single', 'dual'].includes(currencyMode)) {
+                return res.status(400).json({ error: 'Invalid currency mode' });
+            }
+            user.currencyMode = currencyMode;
+        }
+        if (secondaryCurrency !== undefined) {
+            if (!validCurrencies.includes(secondaryCurrency)) {
+                return res.status(400).json({ error: 'Invalid secondary currency' });
+            }
+            user.secondaryCurrency = secondaryCurrency;
         }
 
         await user.save();
@@ -185,7 +205,9 @@ router.patch('/profile', auth, async (req, res) => {
                 email: user.email,
                 firstName: user.firstName,
                 lastName: user.lastName,
-                defaultCurrency: user.defaultCurrency
+                defaultCurrency: user.defaultCurrency,
+                currencyMode: user.currencyMode,
+                secondaryCurrency: user.secondaryCurrency
             }
         });
     } catch (error) {

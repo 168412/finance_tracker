@@ -31,10 +31,24 @@ const userSchema = new mongoose.Schema({
     },
     defaultCurrency: {
         type: String,
-        enum: ['EUR', 'INR', 'USD', 'GBP'],
+        enum: ['EUR', 'INR', 'USD', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY', 'IDR'],
         default: 'EUR'
     },
+    currencyMode: {
+        type: String,
+        enum: ['single', 'dual'],
+        default: 'dual'
+    },
+    secondaryCurrency: {
+        type: String,
+        enum: ['EUR', 'INR', 'USD', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY', 'IDR'],
+        default: 'INR'
+    },
     aiEnabled: {
+        type: Boolean,
+        default: true
+    },
+    consentAccepted: {
         type: Boolean,
         default: true
     },
