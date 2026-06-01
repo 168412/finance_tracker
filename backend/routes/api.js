@@ -12,6 +12,16 @@ router.use(auth); // Protect all API routes
 // Helper to format ID
 const formatDoc = (doc) => ({ ...doc.toObject(), id: doc._id.toString(), _id: undefined, userId: undefined, __v: undefined });
 
+// Helper to convert currency
+const convertAmount = async (amount, fromCur, toCur) => {
+    if (!fromCur || !toCur || fromCur === toCur) return amount;
+    const rateDoc = await ExchangeRate.findOne({ id: '1' });
+    const rates = rateDoc && rateDoc.rates ? rateDoc.rates : { EUR: 1, USD: 1.08, GBP: 0.85, INR: 90 };
+    const rateFrom = fromCur === 'EUR' ? 1 : (rates[fromCur] || 1);
+    const rateTo = toCur === 'EUR' ? 1 : (rates[toCur] || 1);
+    return amount * (rateTo / rateFrom);
+};
+
 // --- Assets ---
 router.get('/assets', async (req, res) => {
     const assets = await Asset.find({ userId: req.userId });
@@ -45,18 +55,62 @@ router.get('/expenses', async (req, res) => {
 router.post('/expenses', async (req, res) => {
     const expense = new Expense({ ...req.body, userId: req.userId });
     await expense.save();
+
+    if (expense.sourceAssetId) {
+        const asset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
+        if (asset) {
+            const amountToDeduct = await convertAmount(expense.amount, expense.currency, asset.currency);
+            asset.value -= amountToDeduct;
+            await asset.save();
+        }
+    }
+
     res.status(201).json(formatDoc(expense));
 });
 
 router.patch('/expenses/:id', async (req, res) => {
+    const oldExpense = await Expense.findOne({ _id: req.params.id, userId: req.userId });
+    if (!oldExpense) return res.status(404).send();
+
     const expense = await Expense.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
     if (!expense) return res.status(404).send();
+
+    // Revert old expense deduction
+    if (oldExpense.sourceAssetId) {
+        const oldAsset = await Asset.findOne({ _id: oldExpense.sourceAssetId, userId: req.userId });
+        if (oldAsset) {
+            const amountToAdd = await convertAmount(oldExpense.amount, oldExpense.currency, oldAsset.currency);
+            oldAsset.value += amountToAdd;
+            await oldAsset.save();
+        }
+    }
+
+    // Apply new expense deduction
+    if (expense.sourceAssetId) {
+        const newAsset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
+        if (newAsset) {
+            const amountToDeduct = await convertAmount(expense.amount, expense.currency, newAsset.currency);
+            newAsset.value -= amountToDeduct;
+            await newAsset.save();
+        }
+    }
+
     res.json(formatDoc(expense));
 });
 
 router.delete('/expenses/:id', async (req, res) => {
     const expense = await Expense.findOneAndDelete({ _id: req.params.id, userId: req.userId });
     if (!expense) return res.status(404).send();
+
+    if (expense.sourceAssetId) {
+        const asset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
+        if (asset) {
+            const amountToAdd = await convertAmount(expense.amount, expense.currency, asset.currency);
+            asset.value += amountToAdd;
+            await asset.save();
+        }
+    }
+
     res.status(204).send();
 });
 
