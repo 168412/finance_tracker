@@ -57,11 +57,15 @@ router.post('/expenses', async (req, res) => {
     await expense.save();
 
     if (expense.sourceAssetId) {
-        const asset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
-        if (asset) {
-            const amountToDeduct = await convertAmount(expense.amount, expense.currency, asset.currency);
-            asset.value -= amountToDeduct;
-            await asset.save();
+        try {
+            const asset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
+            if (asset) {
+                const amountToDeduct = await convertAmount(expense.amount, expense.currency, asset.currency);
+                asset.value -= amountToDeduct;
+                await asset.save();
+            }
+        } catch (e) {
+            console.error('Failed to update asset on POST', e);
         }
     }
 
@@ -75,23 +79,34 @@ router.patch('/expenses/:id', async (req, res) => {
     const expense = await Expense.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
     if (!expense) return res.status(404).send();
 
-    // Revert old expense deduction
-    if (oldExpense.sourceAssetId) {
-        const oldAsset = await Asset.findOne({ _id: oldExpense.sourceAssetId, userId: req.userId });
-        if (oldAsset) {
-            const amountToAdd = await convertAmount(oldExpense.amount, oldExpense.currency, oldAsset.currency);
-            oldAsset.value += amountToAdd;
-            await oldAsset.save();
-        }
-    }
+    // Check if any financial field changed
+    const amountChanged = oldExpense.amount !== expense.amount;
+    const currencyChanged = oldExpense.currency !== expense.currency;
+    const assetChanged = String(oldExpense.sourceAssetId || '') !== String(expense.sourceAssetId || '');
 
-    // Apply new expense deduction
-    if (expense.sourceAssetId) {
-        const newAsset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
-        if (newAsset) {
-            const amountToDeduct = await convertAmount(expense.amount, expense.currency, newAsset.currency);
-            newAsset.value -= amountToDeduct;
-            await newAsset.save();
+    if (amountChanged || currencyChanged || assetChanged) {
+        // Revert old expense deduction
+        if (oldExpense.sourceAssetId) {
+            try {
+                const oldAsset = await Asset.findOne({ _id: oldExpense.sourceAssetId, userId: req.userId });
+                if (oldAsset) {
+                    const amountToAdd = await convertAmount(oldExpense.amount, oldExpense.currency, oldAsset.currency);
+                    oldAsset.value += amountToAdd;
+                    await oldAsset.save();
+                }
+            } catch (e) {}
+        }
+
+        // Apply new expense deduction
+        if (expense.sourceAssetId) {
+            try {
+                const newAsset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
+                if (newAsset) {
+                    const amountToDeduct = await convertAmount(expense.amount, expense.currency, newAsset.currency);
+                    newAsset.value -= amountToDeduct;
+                    await newAsset.save();
+                }
+            } catch (e) {}
         }
     }
 
@@ -103,12 +118,14 @@ router.delete('/expenses/:id', async (req, res) => {
     if (!expense) return res.status(404).send();
 
     if (expense.sourceAssetId) {
-        const asset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
-        if (asset) {
-            const amountToAdd = await convertAmount(expense.amount, expense.currency, asset.currency);
-            asset.value += amountToAdd;
-            await asset.save();
-        }
+        try {
+            const asset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
+            if (asset) {
+                const amountToAdd = await convertAmount(expense.amount, expense.currency, asset.currency);
+                asset.value += amountToAdd;
+                await asset.save();
+            }
+        } catch (e) {}
     }
 
     res.status(204).send();
