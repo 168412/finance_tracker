@@ -7,6 +7,8 @@ import { ExchangeRate } from '../models/ExchangeRate.js';
 import { RecurringExpense } from '../models/RecurringExpense.js';
 import { Budget } from '../models/Budget.js';
 import { evaluateRecurringExpenses } from '../services/cronService.js';
+import multer from 'multer';
+import ExcelJS from 'exceljs';
 
 const router = express.Router();
 
@@ -318,23 +320,86 @@ router.get('/export', async (req, res) => {
         const assets = await Asset.find({ userId: req.userId });
         const lendings = await Lending.find({ userId: req.userId });
 
-        let csv = 'Type,Name,Category,Amount,Currency,Date,Notes\n';
+        const workbook = new ExcelJS.Workbook();
         
-        expenses.forEach(e => {
-            csv += `Expense,,${e.category},${e.amount},${e.currency},${e.date ? e.date.toISOString().split('T')[0] : ''},"${(e.notes || '').replace(/"/g, '""')}"\n`;
-        });
-        
-        assets.forEach(a => {
-            csv += `Asset,${a.name},${a.category},${a.value},${a.currency},,""\n`;
-        });
-        
-        lendings.forEach(l => {
-            csv += `Lending,${l.name},${l.type},${l.amount},${l.currency},${l.date ? new Date(l.date).toISOString().split('T')[0] : ''},"${(l.description || '').replace(/"/g, '""')}"\n`;
-        });
+        const styleSheet = (ws, columns, data) => {
+            ws.columns = columns;
+            
+            // Add Data
+            data.forEach(row => ws.addRow(row));
+            
+            // Style Header Row
+            const headerRow = ws.getRow(1);
+            headerRow.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+            headerRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF3B82F6' } }; // Blue
+            headerRow.alignment = { vertical: 'middle', horizontal: 'center' };
+            
+            // Style Type column
+            ws.eachRow((row, rowNumber) => {
+                if (rowNumber > 1) {
+                    row.getCell(1).font = { bold: true, color: { argb: 'FF4F46E5' } }; // Indigo
+                }
+            });
+            
+            ws.columns.forEach(column => { column.width = 20; });
+        };
 
-        res.header('Content-Type', 'text/csv');
-        res.attachment('finance_export.csv');
-        res.send(csv);
+        const wsExpenses = workbook.addWorksheet('Expenses');
+        styleSheet(wsExpenses, [
+            { header: 'Type', key: 'type' },
+            { header: 'Category', key: 'category' },
+            { header: 'Amount', key: 'amount' },
+            { header: 'Currency', key: 'currency' },
+            { header: 'Date', key: 'date' },
+            { header: 'Notes', key: 'notes' }
+        ], expenses.map(e => ({
+            type: 'Expense',
+            category: e.category,
+            amount: e.amount,
+            currency: e.currency,
+            date: e.date ? e.date.toISOString().split('T')[0] : '',
+            notes: e.notes || ''
+        })));
+
+        const wsAssets = workbook.addWorksheet('Assets');
+        styleSheet(wsAssets, [
+            { header: 'Type', key: 'type' },
+            { header: 'Name', key: 'name' },
+            { header: 'Category', key: 'category' },
+            { header: 'Amount', key: 'amount' },
+            { header: 'Currency', key: 'currency' }
+        ], assets.map(a => ({
+            type: 'Asset',
+            name: a.name,
+            category: a.category,
+            amount: a.value,
+            currency: a.currency
+        })));
+
+        const wsLendings = workbook.addWorksheet('Lending');
+        styleSheet(wsLendings, [
+            { header: 'Type', key: 'type' },
+            { header: 'Name', key: 'name' },
+            { header: 'LendingType', key: 'lendingType' },
+            { header: 'Amount', key: 'amount' },
+            { header: 'Currency', key: 'currency' },
+            { header: 'Date', key: 'date' },
+            { header: 'Notes', key: 'notes' }
+        ], lendings.map(l => ({
+            type: 'Lending',
+            name: l.name,
+            lendingType: l.type,
+            amount: l.amount,
+            currency: l.currency,
+            date: l.date ? new Date(l.date).toISOString().split('T')[0] : '',
+            notes: l.description || ''
+        })));
+
+        const buf = await workbook.xlsx.writeBuffer();
+
+        res.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+        res.attachment('finance_export.xlsx');
+        res.send(buf);
     } catch (error) {
         console.error('Error generating export:', error);
         res.status(500).json({ error: 'Failed to generate export' });
