@@ -4,10 +4,22 @@ import { Expense } from '../models/Expense.js';
 import { Lending } from '../models/Lending.js';
 import { auth } from '../middleware/auth.js';
 import { ExchangeRate } from '../models/ExchangeRate.js';
+import { RecurringExpense } from '../models/RecurringExpense.js';
+import { Budget } from '../models/Budget.js';
+import { evaluateRecurringExpenses } from '../services/cronService.js';
 
 const router = express.Router();
 
 router.use(auth); // Protect all API routes
+
+// Lazy evaluation of recurring expenses
+router.use(async (req, res, next) => {
+    if (req.method === 'GET' && req.userId) {
+        // Run lazy evaluation in the background to not delay the API response significantly
+        evaluateRecurringExpenses(req.userId).catch(console.error);
+    }
+    next();
+});
 
 // Helper to format ID
 const formatDoc = (doc) => ({ ...doc.toObject(), id: doc._id.toString(), _id: undefined, userId: undefined, __v: undefined });
@@ -218,6 +230,114 @@ router.get('/exchangeRate/fetch/latest', async (req, res) => {
     } catch (error) {
         console.error('Error fetching from Frankfurter API:', error);
         res.status(500).json({ error: 'Failed to fetch exchange rate from Frankfurter API', details: error.message });
+    }
+});
+
+// --- Recurring Expenses ---
+router.get('/recurring', async (req, res) => {
+    try {
+        const recurring = await RecurringExpense.find({ userId: req.userId });
+        res.json(recurring.map(formatDoc));
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch recurring expenses' });
+    }
+});
+
+router.post('/recurring', async (req, res) => {
+    try {
+        const recurring = new RecurringExpense({ ...req.body, userId: req.userId });
+        await recurring.save();
+        res.status(201).json(formatDoc(recurring));
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create recurring expense' });
+    }
+});
+
+router.put('/recurring/:id', async (req, res) => {
+    try {
+        const recurring = await RecurringExpense.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
+        if (recurring) res.json(formatDoc(recurring));
+        else res.status(404).json({ error: 'Recurring expense not found' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update recurring expense' });
+    }
+});
+
+router.delete('/recurring/:id', async (req, res) => {
+    try {
+        await RecurringExpense.findOneAndDelete({ _id: req.params.id, userId: req.userId });
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete recurring expense' });
+    }
+});
+
+// --- Budgets ---
+router.get('/budgets', async (req, res) => {
+    try {
+        const budgets = await Budget.find({ userId: req.userId });
+        res.json(budgets.map(formatDoc));
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch budgets' });
+    }
+});
+
+router.post('/budgets', async (req, res) => {
+    try {
+        const budget = new Budget({ ...req.body, userId: req.userId });
+        await budget.save();
+        res.status(201).json(formatDoc(budget));
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to create budget' });
+    }
+});
+
+router.put('/budgets/:id', async (req, res) => {
+    try {
+        const budget = await Budget.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
+        if (budget) res.json(formatDoc(budget));
+        else res.status(404).json({ error: 'Budget not found' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to update budget' });
+    }
+});
+
+router.delete('/budgets/:id', async (req, res) => {
+    try {
+        await Budget.findOneAndDelete({ _id: req.params.id, userId: req.userId });
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete budget' });
+    }
+});
+
+// --- Data Export ---
+router.get('/export', async (req, res) => {
+    try {
+        const expenses = await Expense.find({ userId: req.userId });
+        const assets = await Asset.find({ userId: req.userId });
+        const lendings = await Lending.find({ userId: req.userId });
+
+        let csv = 'Type,Name,Category,Amount,Currency,Date,Notes\n';
+        
+        expenses.forEach(e => {
+            csv += `Expense,,${e.category},${e.amount},${e.currency},${e.date ? e.date.toISOString().split('T')[0] : ''},"${(e.notes || '').replace(/"/g, '""')}"\n`;
+        });
+        
+        assets.forEach(a => {
+            csv += `Asset,${a.name},${a.category},${a.balance},${a.currency},,""\n`;
+        });
+        
+        lendings.forEach(l => {
+            csv += `Lending,${l.name},${l.type},${l.amount},${l.currency},${l.date ? new Date(l.date).toISOString().split('T')[0] : ''},"${(l.description || '').replace(/"/g, '""')}"\n`;
+        });
+
+        res.header('Content-Type', 'text/csv');
+        res.attachment('finance_export.csv');
+        res.send(csv);
+    } catch (error) {
+        console.error('Error generating export:', error);
+        res.status(500).json({ error: 'Failed to generate export' });
     }
 });
 
