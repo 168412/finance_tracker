@@ -325,7 +325,7 @@ router.get('/export', async (req, res) => {
         });
         
         assets.forEach(a => {
-            csv += `Asset,${a.name},${a.category},${a.balance},${a.currency},,""\n`;
+            csv += `Asset,${a.name},${a.category},${a.value},${a.currency},,""\n`;
         });
         
         lendings.forEach(l => {
