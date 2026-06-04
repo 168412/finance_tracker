@@ -165,7 +165,7 @@ router.get('/me', auth, async (req, res) => {
 // ========== UPDATE USER PROFILE ROUTE ==========
 router.patch('/profile', auth, async (req, res) => {
     try {
-        const { firstName, lastName, defaultCurrency, currencyMode, secondaryCurrency } = req.body;
+        const { firstName, lastName, defaultCurrency, currencyMode, secondaryCurrency, language } = req.body;
 
         const user = await User.findById(req.userId);
         if (!user) {
@@ -193,6 +193,13 @@ router.patch('/profile', auth, async (req, res) => {
                 return res.status(400).json({ error: 'Invalid secondary currency' });
             }
             user.secondaryCurrency = secondaryCurrency;
+        }
+
+        if (language !== undefined) {
+            if (!['en', 'es', 'hi', 'fr', 'de', 'id'].includes(language)) {
+                return res.status(400).json({ error: 'Invalid language' });
+            }
+            user.language = language;
         }
 
         await user.save();

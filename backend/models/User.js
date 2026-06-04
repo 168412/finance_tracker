@@ -44,6 +44,11 @@ const userSchema = new mongoose.Schema({
         enum: ['EUR', 'INR', 'USD', 'GBP', 'JPY', 'CAD', 'AUD', 'CHF', 'CNY', 'IDR'],
         default: 'INR'
     },
+    language: {
+        type: String,
+        enum: ['en', 'es', 'hi', 'fr', 'de', 'id'],
+        default: 'en'
+    },
     aiEnabled: {
         type: Boolean,
         default: true
