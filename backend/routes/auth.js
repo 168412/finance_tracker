@@ -1,5 +1,7 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
+import nodemailer from 'nodemailer';
 import { User } from '../models/User.js';
 import { auth } from '../middleware/auth.js';
 
@@ -265,5 +267,96 @@ router.post('/change-password', auth, async (req, res) => {
         res.status(500).json({ error: 'Error changing password' });
     }
 });
+
+
+// ========== FORGOT PASSWORD ROUTE ==========
+router.post('/forgot-password', async (req, res) => {
+    try {
+        const { email } = req.body;
+        if (!email) return res.status(400).json({ error: 'Email is required' });
+
+        const user = await User.findOne({ email: email.toLowerCase() });
+        if (!user) {
+            // Return success even if user not found to prevent email enumeration
+            return res.json({ message: 'If an account with that email exists, a reset token has been sent.' });
+        }
+
+        // Generate a 6-digit OTP token
+        const resetToken = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        user.resetPasswordToken = resetToken;
+        user.resetPasswordExpires = Date.now() + 3600000; // 1 hour
+        await user.save();
+
+        // Configure nodemailer transporter
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        });
+
+        // Setup email data
+        const mailOptions = {
+            from: `"Finance Tracker" <${process.env.EMAIL_USER}>`,
+            to: user.email,
+            subject: 'Password Reset Token',
+            text: `You requested a password reset.\n\nYour 6-digit Reset Token is: ${resetToken}\n\nThis token will expire in 1 hour.`,
+            html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px;">
+                    <h2 style="color: #3b82f6;">Password Reset</h2>
+                    <p>You requested a password reset for your Finance Tracker account.</p>
+                    <p>Your 6-digit Reset Token is:</p>
+                    <h1 style="background-color: #f1f5f9; padding: 10px; border-radius: 8px; display: inline-block;">${resetToken}</h1>
+                    <p>This token will expire in 1 hour.</p>
+                    <p>If you did not request this, please ignore this email.</p>
+                </div>
+            `
+        };
+
+        // Send email
+        await transporter.sendMail(mailOptions);
+        console.log(`Password reset email sent to: ${user.email}`);
+
+        res.json({ message: 'If an account with that email exists, a reset token has been sent.' });
+    } catch (error) {
+        console.error('Forgot password error:', error);
+        res.status(500).json({ error: 'Error processing request' });
+    }
+});
+
+// ========== RESET PASSWORD ROUTE ==========
+router.post('/reset-password', async (req, res) => {
+    try {
+        const { email, token, newPassword } = req.body;
+        
+        if (!email || !token || !newPassword) {
+            return res.status(400).json({ error: 'Email, token, and new password are required' });
+        }
+
+        const user = await User.findOne({
+            email: email.toLowerCase(),
+            resetPasswordToken: token,
+            resetPasswordExpires: { $gt: Date.now() }
+        });
+
+        if (!user) {
+            return res.status(400).json({ error: 'Password reset token is invalid or has expired.' });
+        }
+
+        // Update password (will be hashed by pre-save hook)
+        user.password = newPassword;
+        user.resetPasswordToken = null;
+        user.resetPasswordExpires = null;
+        await user.save();
+
+        res.json({ message: 'Password has been reset successfully. You can now log in.' });
+    } catch (error) {
+        console.error('Reset password error:', error);
+        res.status(500).json({ error: 'Error resetting password' });
+    }
+});
+
 
 export default router;
