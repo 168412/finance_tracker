@@ -4,6 +4,19 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const router = express.Router();
 
+const getLanguageName = (code) => {
+    const map = {
+        'en': 'English',
+        'es': 'Spanish',
+        'hi': 'Hindi',
+        'fr': 'French',
+        'de': 'German',
+        'id': 'Indonesian'
+    };
+    return map[code?.split('-')[0]] || 'English';
+};
+
+
 router.use(auth);
 
 // Universal AI Helper for Text Generation
@@ -48,10 +61,12 @@ router.get('/ai-status', checkAIEnabled, async (req, res) => {
 
 router.post('/insights', checkAIEnabled, async (req, res) => {
     try {
-        const { expenses, assets, currentMonth } = req.body;
+        const { expenses, assets, currentMonth, userLanguage } = req.body;
+        console.log("Language received:", userLanguage);
         const prompt = `Analyze these expenses and assets for ${currentMonth}. Provide 3 brief, actionable financial insights. 
         Expenses: ${JSON.stringify(expenses)}
         Assets: ${JSON.stringify(assets)}
+        IMPORTANT: You MUST reply entirely in ${getLanguageName(userLanguage)}.
         Respond ONLY with a valid JSON array of strings. Format: ["Insight 1", "Insight 2", "Insight 3"]`;
 
         let responseText = await generateAIText(prompt);
@@ -68,14 +83,16 @@ router.post('/insights', checkAIEnabled, async (req, res) => {
 
 router.post('/chat', checkAIEnabled, async (req, res) => {
     try {
-        const { message, expenses, assets, currentMonth, history } = req.body;
+        const { message, expenses, assets, currentMonth, history, userLanguage } = req.body;
         if (!message) {
             return res.status(400).json({ error: 'Message is required' });
         }
 
+        console.log("Chat language received:", userLanguage);
         const prompt = `You are a helpful personal finance AI assistant answering questions about the user's spending.
         Context - Month: ${currentMonth} | Expenses: ${JSON.stringify(expenses)} | Assets: ${JSON.stringify(assets)}
         Conversation History: ${JSON.stringify(history)}
+        IMPORTANT: You MUST reply entirely in ${getLanguageName(userLanguage)}.
         User Message: "${message}"
         Provide a helpful, conversational, and concise response.`;
 

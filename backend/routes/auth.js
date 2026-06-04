@@ -84,7 +84,8 @@ router.post('/signup', async (req, res) => {
                 lastName: user.lastName,
                 defaultCurrency: user.defaultCurrency,
                 currencyMode: user.currencyMode,
-                secondaryCurrency: user.secondaryCurrency
+                secondaryCurrency: user.secondaryCurrency,
+                language: user.language
             }
         });
     } catch (error) {
@@ -139,7 +140,8 @@ router.post('/login', async (req, res) => {
                 lastName: user.lastName,
                 defaultCurrency: user.defaultCurrency,
                 currencyMode: user.currencyMode,
-                secondaryCurrency: user.secondaryCurrency
+                secondaryCurrency: user.secondaryCurrency,
+                language: user.language
             }
         });
     } catch (error) {
@@ -165,6 +167,7 @@ router.get('/me', auth, async (req, res) => {
 // ========== UPDATE USER PROFILE ROUTE ==========
 router.patch('/profile', auth, async (req, res) => {
     try {
+        console.log('PATCH /profile req.body:', req.body);
         const { firstName, lastName, defaultCurrency, currencyMode, secondaryCurrency, language } = req.body;
 
         const user = await User.findById(req.userId);
@@ -214,7 +217,8 @@ router.patch('/profile', auth, async (req, res) => {
                 lastName: user.lastName,
                 defaultCurrency: user.defaultCurrency,
                 currencyMode: user.currencyMode,
-                secondaryCurrency: user.secondaryCurrency
+                secondaryCurrency: user.secondaryCurrency,
+                language: user.language
             }
         });
     } catch (error) {
