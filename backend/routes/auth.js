@@ -65,7 +65,11 @@ router.post('/signup', async (req, res) => {
             email: email.toLowerCase(),
             password,
             firstName,
-            lastName
+            lastName,
+            defaultCurrency: defaultCurrency || 'EUR',
+            secondaryCurrency: secondaryCurrency || 'INR',
+            currencyMode: currencyMode || 'single',
+            language: language || 'en'
         });
 
         await user.save();
