@@ -3,6 +3,13 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import nodemailer from 'nodemailer';
 import { User } from '../models/User.js';
+import bcrypt from 'bcryptjs';
+import { Asset } from '../models/Asset.js';
+import { Expense } from '../models/Expense.js';
+import { Budget } from '../models/Budget.js';
+import { Lending } from '../models/Lending.js';
+import { RecurringExpense } from '../models/RecurringExpense.js';
+import { encryptEmail, decryptEmail } from '../utils/encryption.js';
 import { auth } from '../middleware/auth.js';
 
 const router = express.Router();
@@ -28,7 +35,10 @@ const isStrongPassword = (password) => {
 // ========== SIGNUP ROUTE ==========
 router.post('/signup', async (req, res) => {
     try {
-        const { username, email, password, firstName = '', lastName = '' } = req.body;
+        const { 
+            username, email, password, firstName = '', lastName = '',
+            defaultCurrency, secondaryCurrency, currencyMode, language 
+        } = req.body;
 
         // Validation
         if (!username || !email || !password) {
@@ -48,51 +58,83 @@ router.post('/signup', async (req, res) => {
         }
 
         // Check if user already exists
+        const encryptedEmail = encryptEmail(email.toLowerCase());
         const existingUser = await User.findOne({
-            $or: [{ username: username.toLowerCase() }, { email: email.toLowerCase() }]
+            $or: [
+                { username: username.toLowerCase() }, 
+                { email: encryptedEmail },
+                { email: email.toLowerCase() }
+            ]
         });
 
         if (existingUser) {
+            if (existingUser.email === encryptedEmail || existingUser.email === email.toLowerCase()) {
+                return res.status(400).json({ error: 'You are already registered, you can reset your password.' });
+            }
             if (existingUser.username === username.toLowerCase()) {
                 return res.status(400).json({ error: 'Username already exists' });
-            }
-            if (existingUser.email === email.toLowerCase()) {
-                return res.status(400).json({ error: 'Email already exists' });
             }
         }
 
         // Create new user
-        const user = new User({
-            username: username.toLowerCase(),
-            email: email.toLowerCase(),
-            password,
-            firstName,
-            lastName,
-            defaultCurrency: defaultCurrency || 'EUR',
-            secondaryCurrency: secondaryCurrency || 'INR',
-            currencyMode: currencyMode || 'single',
-            language: language || 'en'
+        // Stateless Registration Token
+        const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedOtp = await bcrypt.hash(verificationToken, 10);
+        
+        const registrationToken = jwt.sign({
+            userData: {
+                username: username.toLowerCase(),
+                email: email.toLowerCase(),
+                password,
+                firstName,
+                lastName,
+                defaultCurrency: defaultCurrency || 'EUR',
+                secondaryCurrency: secondaryCurrency || 'INR',
+                currencyMode: currencyMode || 'single',
+                language: language || 'en'
+            },
+            otpHash: hashedOtp
+        }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '1h' });
+
+        // Configure nodemailer transporter
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
         });
 
-        await user.save();
+        const mailOptions = {
+            from: `"Finance Tracker" <${process.env.EMAIL_USER}>`,
+            to: email,
+            subject: 'Verify your email address',
+            text: `Welcome to Finance Tracker!\n\nYour 6-digit Email Verification Code is: ${verificationToken}\n\nThis token will expire in 1 hour.`,
+            html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px;">
+                    <h2 style="color: #3b82f6;">Welcome to Finance Tracker!</h2>
+                    <p>Please verify your email address to get started.</p>
+                    <p>Your 6-digit Verification Code is:</p>
+                    <h1 style="background-color: #f1f5f9; padding: 10px; border-radius: 8px; display: inline-block;">${verificationToken}</h1>
+                    <p>This code will expire in 1 hour.</p>
+                </div>
+            `
+        };
 
-        // Generate token
-        const token = generateToken(user._id);
+        // Send email (swallow error in dev if credentials not set)
+        try {
+            await transporter.sendMail(mailOptions);
+            console.log(`Verification email sent to: ${email}`);
+        } catch (e) {
+            console.log(`[DEVELOPMENT ONLY] Verification Requested for ${email}`);
+            console.log(`Verification Token/OTP: ${verificationToken}`);
+        }
 
         res.status(201).json({
-            message: 'User created successfully',
-            token,
-            user: {
-                id: user._id,
-                username: user.username,
-                email: user.email,
-                firstName: user.firstName,
-                lastName: user.lastName,
-                defaultCurrency: user.defaultCurrency,
-                currencyMode: user.currencyMode,
-                secondaryCurrency: user.secondaryCurrency,
-                language: user.language
-            }
+            message: 'Registration initiated. Please verify your email.',
+            requiresVerification: true,
+            registrationToken,
+            email
         });
     } catch (error) {
         console.error('Signup error:', error);
@@ -111,21 +153,28 @@ router.post('/login', async (req, res) => {
         }
 
         // Find user by username or email
+        const encryptedEmail = encryptEmail(username.toLowerCase());
         const user = await User.findOne({
             $or: [
                 { username: username.toLowerCase() },
-                { email: username.toLowerCase() }
+                { email: encryptedEmail },
+                { email: username.toLowerCase() } // For legacy unencrypted emails!
             ]
         });
 
         if (!user) {
-            return res.status(401).json({ error: 'Invalid credentials' });
+            return res.status(401).json({ error: 'Username or password is wrong' });
         }
 
         // Check password
         const isMatch = await user.comparePassword(password);
         if (!isMatch) {
-            return res.status(401).json({ error: 'Invalid credentials' });
+            return res.status(401).json({ error: 'Username or password is wrong' });
+        }
+
+        // Check verification
+        if (!user.isEmailVerified) {
+            return res.status(403).json({ error: 'Please verify your email to log in.', requiresVerification: true });
         }
 
         // Update last login
@@ -141,7 +190,7 @@ router.post('/login', async (req, res) => {
             user: {
                 id: user._id,
                 username: user.username,
-                email: user.email,
+                email: decryptEmail(user.email),
                 firstName: user.firstName,
                 lastName: user.lastName,
                 defaultCurrency: user.defaultCurrency,
@@ -163,7 +212,9 @@ router.get('/me', auth, async (req, res) => {
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
-        res.json(user);
+        const userObj = user.toObject();
+        userObj.email = decryptEmail(userObj.email);
+        res.json(userObj);
     } catch (error) {
         console.error('Get user error:', error);
         res.status(500).json({ error: 'Error fetching user' });
@@ -218,7 +269,7 @@ router.patch('/profile', auth, async (req, res) => {
             user: {
                 id: user._id,
                 username: user.username,
-                email: user.email,
+                email: decryptEmail(user.email),
                 firstName: user.firstName,
                 lastName: user.lastName,
                 defaultCurrency: user.defaultCurrency,
@@ -275,7 +326,8 @@ router.post('/forgot-password', async (req, res) => {
         const { email } = req.body;
         if (!email) return res.status(400).json({ error: 'Email is required' });
 
-        const user = await User.findOne({ email: email.toLowerCase() });
+        const encryptedEmail = encryptEmail(email.toLowerCase());
+        const user = await User.findOne({ email: encryptedEmail });
         if (!user) {
             // Return success even if user not found to prevent email enumeration
             return res.json({ message: 'If an account with that email exists, a reset token has been sent.' });
@@ -300,7 +352,7 @@ router.post('/forgot-password', async (req, res) => {
         // Setup email data
         const mailOptions = {
             from: `"Finance Tracker" <${process.env.EMAIL_USER}>`,
-            to: user.email,
+            to: decryptEmail(user.email),
             subject: 'Password Reset Token',
             text: `You requested a password reset.\n\nYour 6-digit Reset Token is: ${resetToken}\n\nThis token will expire in 1 hour.`,
             html: `
@@ -317,7 +369,7 @@ router.post('/forgot-password', async (req, res) => {
 
         // Send email
         await transporter.sendMail(mailOptions);
-        console.log(`Password reset email sent to: ${user.email}`);
+        console.log(`Password reset email sent to: ${decryptEmail(user.email)}`);
 
         res.json({ message: 'If an account with that email exists, a reset token has been sent.' });
     } catch (error) {
@@ -335,8 +387,9 @@ router.post('/reset-password', async (req, res) => {
             return res.status(400).json({ error: 'Email, token, and new password are required' });
         }
 
+        const encryptedEmail = encryptEmail(email.toLowerCase());
         const user = await User.findOne({
-            email: email.toLowerCase(),
+            email: encryptedEmail,
             resetPasswordToken: token,
             resetPasswordExpires: { $gt: Date.now() }
         });
@@ -358,5 +411,167 @@ router.post('/reset-password', async (req, res) => {
     }
 });
 
+
+
+// ========== VERIFY EMAIL ROUTE ==========
+router.post('/verify-email', async (req, res) => {
+    try {
+        const { registrationToken, token } = req.body;
+        
+        if (!registrationToken || !token) {
+            return res.status(400).json({ error: 'Registration token and OTP are required' });
+        }
+
+        let decoded;
+        try {
+            decoded = jwt.verify(registrationToken, process.env.JWT_SECRET || 'fallback_secret');
+        } catch (e) {
+            return res.status(400).json({ error: 'Registration session expired or invalid. Please sign up again.' });
+        }
+
+        const isMatch = await bcrypt.compare(token, decoded.otpHash);
+        if (!isMatch) {
+            return res.status(400).json({ error: 'Invalid verification code.' });
+        }
+
+        const { userData } = decoded;
+        const encryptedEmail = encryptEmail(userData.email);
+
+        // Check again to avoid race conditions
+        const existingUser = await User.findOne({
+            $or: [{ username: userData.username }, { email: encryptedEmail }]
+        });
+
+        if (existingUser) {
+            return res.status(400).json({ error: 'User already registered during verification process.' });
+        }
+
+        // Create the verified user
+        const user = new User({
+            ...userData,
+            email: encryptedEmail,
+            isEmailVerified: true,
+            lastLogin: new Date()
+        });
+
+        // userData already contains plain password, pre-save hook will hash it!
+        await user.save();
+
+        const jwtToken = generateToken(user._id);
+
+        res.json({
+            message: 'Email verified successfully',
+            token: jwtToken,
+            user: {
+                id: user._id,
+                username: user.username,
+                email: decryptEmail(user.email),
+                firstName: user.firstName,
+                lastName: user.lastName,
+                defaultCurrency: user.defaultCurrency,
+                currencyMode: user.currencyMode,
+                secondaryCurrency: user.secondaryCurrency,
+                language: user.language
+            }
+        });
+    } catch (error) {
+        console.error('Verify email error:', error);
+        res.status(500).json({ error: 'Error verifying email' });
+    }
+});
+
+// ========== RESEND VERIFICATION ROUTE ==========
+router.post('/resend-verification', async (req, res) => {
+    try {
+        const { registrationToken } = req.body;
+        if (!registrationToken) return res.status(400).json({ error: 'Registration token is required' });
+
+        let decoded;
+        try {
+            decoded = jwt.verify(registrationToken, process.env.JWT_SECRET || 'fallback_secret', { ignoreExpiration: true });
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid registration session' });
+        }
+
+        // Generate a new 6-digit OTP
+        const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
+        const hashedOtp = await bcrypt.hash(verificationToken, 10);
+        
+        const newRegistrationToken = jwt.sign({
+            userData: decoded.userData,
+            otpHash: hashedOtp
+        }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '1h' });
+
+        // Configure nodemailer transporter
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: process.env.EMAIL_USER,
+                pass: process.env.EMAIL_PASS
+            }
+        });
+
+        const email = decoded.userData.email;
+
+        const mailOptions = {
+            from: `"Finance Tracker" <${process.env.EMAIL_USER}>`,
+            to: email,
+            subject: 'Verify your email address',
+            text: `Here is your new verification code: ${verificationToken}
+
+This token will expire in 1 hour.`,
+            html: `
+                <div style="font-family: Arial, sans-serif; padding: 20px;">
+                    <h2 style="color: #3b82f6;">Finance Tracker Verification</h2>
+                    <p>Here is your new 6-digit Verification Code:</p>
+                    <h1 style="background-color: #f1f5f9; padding: 10px; border-radius: 8px; display: inline-block;">${verificationToken}</h1>
+                    <p>This code will expire in 1 hour.</p>
+                </div>
+            `
+        };
+
+        try {
+            await transporter.sendMail(mailOptions);
+        } catch (e) {
+            console.log(`[DEVELOPMENT ONLY] Resend Verification Requested for ${email}`);
+            console.log(`Verification Token/OTP: ${verificationToken}`);
+        }
+
+        res.json({ message: 'Verification code sent.', registrationToken: newRegistrationToken });
+    } catch (error) {
+        console.error('Resend verification error:', error);
+        res.status(500).json({ error: 'Error sending verification code' });
+    }
+});
+
+
+
+// ========== DELETE ACCOUNT ROUTE ==========
+router.delete('/account', auth, async (req, res) => {
+    try {
+        const userId = req.userId;
+        
+        const user = await User.findById(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Cascading Deletes
+        await Promise.all([
+            Asset.deleteMany({ user: userId }),
+            Expense.deleteMany({ user: userId }),
+            Budget.deleteMany({ user: userId }),
+            Lending.deleteMany({ user: userId }),
+            RecurringExpense.deleteMany({ user: userId })
+        ]);
+
+        await User.findByIdAndDelete(userId);
+
+        res.json({ message: 'Account and all associated data deleted successfully' });
+    } catch (error) {
+        console.error('Delete account error:', error);
+        res.status(500).json({ error: 'Error deleting account' });
+    }
+});
 
 export default router;
