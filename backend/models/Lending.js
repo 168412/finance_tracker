@@ -11,6 +11,7 @@ const lendingSchema = new mongoose.Schema({
     notes: { type: String },
     workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Workspace', default: null },
     expenseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Expense', default: null },
+    isSettled: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now }
 });
 

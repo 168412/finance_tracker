@@ -287,12 +287,12 @@ router.post('/lendings/settle/:name', async (req, res) => {
         if (partner) {
             const me = await User.findById(req.userId);
             if (me) {
-                // Delete partner's records of the current user
+                // Mark partner's records of the current user as settled
                 const myNames = [me.firstName, me.username, me.email, 'Workspace Member'].filter(Boolean);
-                await Lending.deleteMany({ 
-                    userId: partner._id, 
-                    name: { $in: myNames } 
-                });
+                await Lending.updateMany(
+                    { userId: partner._id, name: { $in: myNames } },
+                    { $set: { isSettled: true } }
+                );
             }
         }
 
