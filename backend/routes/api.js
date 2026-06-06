@@ -271,7 +271,31 @@ router.delete('/lendings/:id', async (req, res) => {
 
 router.post('/lendings/settle/:name', async (req, res) => {
     try {
+        // Delete current user's records of the partner
         await Lending.deleteMany({ userId: req.userId, name: req.params.name });
+
+        // Try to find the partner user by the name string
+        const partnerName = req.params.name;
+        const partner = await User.findOne({
+            $or: [
+                { firstName: partnerName },
+                { username: partnerName },
+                { email: partnerName }
+            ]
+        });
+
+        if (partner) {
+            const me = await User.findById(req.userId);
+            if (me) {
+                // Delete partner's records of the current user
+                const myNames = [me.firstName, me.username, me.email, 'Workspace Member'].filter(Boolean);
+                await Lending.deleteMany({ 
+                    userId: partner._id, 
+                    name: { $in: myNames } 
+                });
+            }
+        }
+
         res.status(200).json({ message: 'Settled successfully' });
     } catch (e) {
         res.status(500).json({ error: 'Failed to settle lendings' });
