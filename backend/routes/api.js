@@ -87,35 +87,38 @@ router.get('/expenses', async (req, res) => {
 router.post('/expenses', async (req, res) => {
     const expenseData = { ...req.body, userId: req.userId };
     
-    // Calculate Splitwise logic if it's a shared expense
-    let lendingRecord = null;
-    if (req.body.workspaceId && req.body.splitRatio && req.body.splitRatio < 1 && req.body.splitRatio > 0) {
+    // Calculate Splitwise logic if it's an equal shared expense
+    if (req.body.workspaceId && req.body.splitType === 'equal') {
         try {
             const workspace = await Workspace.findById(req.body.workspaceId);
             if (workspace && workspace.members.length > 1) {
-                const partnerId = workspace.members.find(id => String(id) !== String(req.userId));
-                if (partnerId) {
-                    const partnerShare = req.body.amount * (1 - req.body.splitRatio);
-                    
-                    lendingRecord = new Lending({
+                const numMembers = workspace.members.length;
+                const sharePerPerson = req.body.amount / numMembers;
+                
+                const partners = workspace.members.filter(id => String(id) !== String(req.userId));
+                
+                for (const partnerId of partners) {
+                    // Record that the payer 'Given' money to cover the partner's share
+                    const lendingRecord = new Lending({
                         userId: req.userId,
                         name: `Split: ${req.body.category || 'Expense'}`,
                         type: 'Given',
-                        amount: partnerShare,
+                        amount: sharePerPerson,
                         currency: req.body.currency || 'EUR',
                         date: req.body.date || new Date(),
-                        notes: `Automatically split from ${workspace.name} workspace.`
+                        notes: `Equal split from ${workspace.name} workspace.`
                     });
                     await lendingRecord.save();
 
+                    // Record that the partner 'Received' (borrowed) money for their share
                     const partnerLendingRecord = new Lending({
                         userId: partnerId,
                         name: `Split: ${req.body.category || 'Expense'}`,
                         type: 'Received',
-                        amount: partnerShare,
+                        amount: sharePerPerson,
                         currency: req.body.currency || 'EUR',
                         date: req.body.date || new Date(),
-                        notes: `Automatically split from ${workspace.name} workspace.`
+                        notes: `Equal split from ${workspace.name} workspace.`
                     });
                     await partnerLendingRecord.save();
                 }

@@ -9,6 +9,12 @@ const expenseSchema = new mongoose.Schema({
     currency: { type: String, default: 'EUR' },
     description: { type: String, trim: true },
     workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Workspace', default: null },
+    paidBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    splitType: { type: String, enum: ['none', 'equal'], default: 'none' },
+    splits: [{
+        userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        amount: { type: Number, required: true }
+    }],
     sourceAssetId: { type: String },
     items: [{
         id: String,
