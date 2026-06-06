@@ -7,6 +7,8 @@ const expenseSchema = new mongoose.Schema({
     category: { type: String, required: true },
     date: { type: Date, required: true },
     currency: { type: String, default: 'EUR' },
+    description: { type: String, trim: true },
+    workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Workspace', default: null },
     sourceAssetId: { type: String },
     items: [{
         id: String,

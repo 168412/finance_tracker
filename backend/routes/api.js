@@ -3,6 +3,7 @@ import { Asset } from '../models/Asset.js';
 import { Expense } from '../models/Expense.js';
 import { Lending } from '../models/Lending.js';
 import { auth } from '../middleware/auth.js';
+import { Workspace } from '../models/Workspace.js';
 import { ExchangeRate } from '../models/ExchangeRate.js';
 import { RecurringExpense } from '../models/RecurringExpense.js';
 import { Budget } from '../models/Budget.js';
@@ -22,6 +23,22 @@ router.use(async (req, res, next) => {
     }
     next();
 });
+
+// Middleware to check workspace access if workspaceId is provided
+const checkWorkspaceAccess = async (req, res, next) => {
+    if (req.query.workspaceId || req.body.workspaceId) {
+        const wid = req.query.workspaceId || req.body.workspaceId;
+        try {
+            const workspace = await Workspace.findOne({ _id: wid, members: req.userId });
+            if (!workspace) return res.status(403).json({ error: 'Unauthorized workspace access' });
+        } catch (e) {
+            return res.status(400).json({ error: 'Invalid workspace ID' });
+        }
+    }
+    next();
+};
+
+router.use(checkWorkspaceAccess);
 
 // Helper to format ID
 const formatDoc = (doc) => ({ ...doc.toObject(), id: doc._id.toString(), _id: undefined, userId: undefined, __v: undefined });
@@ -62,17 +79,59 @@ router.delete('/assets/:id', async (req, res) => {
 
 // --- Expenses ---
 router.get('/expenses', async (req, res) => {
-    const expenses = await Expense.find({ userId: req.userId });
+    const query = req.query.workspaceId ? { workspaceId: req.query.workspaceId } : { userId: req.userId, $or: [{ workspaceId: null }, { workspaceId: { $exists: false } }] };
+    const expenses = await Expense.find(query);
     res.json(expenses.map(formatDoc));
 });
 
 router.post('/expenses', async (req, res) => {
-    const expense = new Expense({ ...req.body, userId: req.userId });
+    const expenseData = { ...req.body, userId: req.userId };
+    
+    // Calculate Splitwise logic if it's a shared expense
+    let lendingRecord = null;
+    if (req.body.workspaceId && req.body.splitRatio && req.body.splitRatio < 1 && req.body.splitRatio > 0) {
+        try {
+            const workspace = await Workspace.findById(req.body.workspaceId);
+            if (workspace && workspace.members.length > 1) {
+                const partnerId = workspace.members.find(id => String(id) !== String(req.userId));
+                if (partnerId) {
+                    const partnerShare = req.body.amount * (1 - req.body.splitRatio);
+                    
+                    lendingRecord = new Lending({
+                        userId: req.userId,
+                        name: `Split: ${req.body.category || 'Expense'}`,
+                        type: 'Given',
+                        amount: partnerShare,
+                        currency: req.body.currency || 'EUR',
+                        date: req.body.date || new Date(),
+                        notes: `Automatically split from ${workspace.name} workspace.`
+                    });
+                    await lendingRecord.save();
+
+                    const partnerLendingRecord = new Lending({
+                        userId: partnerId,
+                        name: `Split: ${req.body.category || 'Expense'}`,
+                        type: 'Received',
+                        amount: partnerShare,
+                        currency: req.body.currency || 'EUR',
+                        date: req.body.date || new Date(),
+                        notes: `Automatically split from ${workspace.name} workspace.`
+                    });
+                    await partnerLendingRecord.save();
+                }
+            }
+        } catch (error) {
+            console.error('Failed to create split lending records:', error);
+        }
+    }
+
+    const expense = new Expense(expenseData);
     await expense.save();
 
     if (expense.sourceAssetId) {
         try {
-            const asset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
+            const assetQuery = { _id: expense.sourceAssetId, userId: req.userId };
+            const asset = await Asset.findOne(assetQuery);
             if (asset) {
                 const amountToDeduct = await convertAmount(expense.amount, expense.currency, asset.currency);
                 asset.value -= amountToDeduct;
@@ -277,7 +336,8 @@ router.delete('/recurring/:id', async (req, res) => {
 // --- Budgets ---
 router.get('/budgets', async (req, res) => {
     try {
-        const budgets = await Budget.find({ userId: req.userId });
+        const query = req.query.workspaceId ? { workspaceId: req.query.workspaceId } : { userId: req.userId, $or: [{ workspaceId: null }, { workspaceId: { $exists: false } }] };
+        const budgets = await Budget.find(query);
         res.json(budgets.map(formatDoc));
     } catch (error) {
         res.status(500).json({ error: 'Failed to fetch budgets' });

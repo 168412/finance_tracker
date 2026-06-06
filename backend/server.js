@@ -6,6 +6,8 @@ import authRoutes from './routes/auth.js';
 import apiRoutes from './routes/api.js';
 import aiRoutes from './routes/ai.js';
 import aiUploadsRoutes from './routes/aiUploads.js';
+import groceriesRoutes from './routes/groceries.js';
+import workspacesRoutes from './routes/workspaces.js';
 
 dotenv.config({ path: '../.env' }); // Load .env from root
 
@@ -35,6 +37,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api', apiRoutes);
 app.use('/api', aiRoutes);
 app.use('/api', aiUploadsRoutes);
+app.use('/api/groceries', groceriesRoutes);
+app.use('/api/workspaces', workspacesRoutes);
 
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);

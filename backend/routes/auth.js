@@ -154,6 +154,7 @@ router.post('/login', async (req, res) => {
 
         // Find user by username or email
         const encryptedEmail = encryptEmail(username.toLowerCase());
+        console.log(`[LOGIN ATTEMPT] username: ${username.toLowerCase()}, encrypted: ${encryptedEmail}`);
         const user = await User.findOne({
             $or: [
                 { username: username.toLowerCase() },
@@ -163,17 +164,19 @@ router.post('/login', async (req, res) => {
         });
 
         if (!user) {
+            console.log(`[LOGIN FAILED] User not found for: ${username}`);
             return res.status(401).json({ error: 'Username or password is wrong' });
         }
 
         // Check password
         const isMatch = await user.comparePassword(password);
         if (!isMatch) {
+            console.log(`[LOGIN FAILED] Password mismatch for user: ${user.username}`);
             return res.status(401).json({ error: 'Username or password is wrong' });
         }
 
-        // Check verification
-        if (!user.isEmailVerified) {
+        // Check verification (allow legacy users who don't have a token)
+        if (user.isEmailVerified === false && user.emailVerificationToken) {
             return res.status(403).json({ error: 'Please verify your email to log in.', requiresVerification: true });
         }
 
