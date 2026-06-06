@@ -76,62 +76,38 @@ router.post('/signup', async (req, res) => {
             }
         }
 
-        // Create new user
-        // Stateless Registration Token
-        const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
-        const hashedOtp = await bcrypt.hash(verificationToken, 10);
-        
-        const registrationToken = jwt.sign({
-            userData: {
-                username: username.toLowerCase(),
-                email: email.toLowerCase(),
-                password,
-                firstName,
-                lastName,
-                defaultCurrency: defaultCurrency || 'EUR',
-                secondaryCurrency: secondaryCurrency || 'INR',
-                currencyMode: currencyMode || 'single',
-                language: language || 'en'
-            },
-            otpHash: hashedOtp
-        }, process.env.JWT_SECRET || 'fallback_secret', { expiresIn: '1h' });
-
-        // Configure nodemailer transporter
-        const transporter = nodemailer.createTransport({
-            service: 'gmail',
-            auth: {
-                user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS
-            }
+        // Create new user immediately (Email Verification Skipped)
+        const user = new User({
+            username: username.toLowerCase(),
+            email: encryptedEmail,
+            password,
+            firstName,
+            lastName,
+            defaultCurrency: defaultCurrency || 'EUR',
+            secondaryCurrency: secondaryCurrency || 'INR',
+            currencyMode: currencyMode || 'single',
+            language: language || 'en',
+            isEmailVerified: true, // Auto-verified
+            lastLogin: new Date()
         });
 
-        const mailOptions = {
-            from: `"Finance Tracker" <${process.env.EMAIL_USER}>`,
-            to: email,
-            subject: 'Verify your email address',
-            text: `Welcome to Finance Tracker!\n\nYour 6-digit Email Verification Code is: ${verificationToken}\n\nThis token will expire in 1 hour.`,
-            html: `
-                <div style="font-family: Arial, sans-serif; padding: 20px;">
-                    <h2 style="color: #3b82f6;">Welcome to Finance Tracker!</h2>
-                    <p>Please verify your email address to get started.</p>
-                    <p>Your 6-digit Verification Code is:</p>
-                    <h1 style="background-color: #f1f5f9; padding: 10px; border-radius: 8px; display: inline-block;">${verificationToken}</h1>
-                    <p>This code will expire in 1 hour.</p>
-                </div>
-            `
-        };
-
-        // Send email asynchronously (swallow error in dev or if Render blocks SMTP)
-        transporter.sendMail(mailOptions).catch(e => {
-            console.log(`[DEVELOPMENT ONLY] Verification Requested for ${email}`);
-            console.log(`Verification Token/OTP: ${verificationToken}`);
-        });
+        await user.save();
+        const jwtToken = generateToken(user._id);
 
         res.status(201).json({
-            message: 'Registration initiated. Please verify your email.',
-            requiresVerification: true,
-            registrationToken,
-            email
+            message: 'Registration successful!',
+            token: jwtToken,
+            user: {
+                id: user._id,
+                username: user.username,
+                email: email.toLowerCase(),
+                firstName: user.firstName,
+                lastName: user.lastName,
+                defaultCurrency: user.defaultCurrency,
+                currencyMode: user.currencyMode,
+                secondaryCurrency: user.secondaryCurrency,
+                language: user.language
+            }
         });
     } catch (error) {
         console.error('Signup error:', error);
