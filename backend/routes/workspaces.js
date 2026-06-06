@@ -86,7 +86,8 @@ router.post('/:id/invite', async (req, res) => {
             `
         };
 
-        await transporter.sendMail(mailOptions);
+        transporter.sendMail(mailOptions).catch(err => console.error('Background email failed:', err.message));
+        
         res.json({ message: 'Invite sent successfully', workspace });
     } catch (error) {
         console.error('Invite error:', error);

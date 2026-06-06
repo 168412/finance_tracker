@@ -121,14 +121,11 @@ router.post('/signup', async (req, res) => {
             `
         };
 
-        // Send email (swallow error in dev if credentials not set)
-        try {
-            await transporter.sendMail(mailOptions);
-            console.log(`Verification email sent to: ${email}`);
-        } catch (e) {
+        // Send email asynchronously (swallow error in dev or if Render blocks SMTP)
+        transporter.sendMail(mailOptions).catch(e => {
             console.log(`[DEVELOPMENT ONLY] Verification Requested for ${email}`);
             console.log(`Verification Token/OTP: ${verificationToken}`);
-        }
+        });
 
         res.status(201).json({
             message: 'Registration initiated. Please verify your email.',
@@ -154,7 +151,6 @@ router.post('/login', async (req, res) => {
 
         // Find user by username or email
         const encryptedEmail = encryptEmail(username.toLowerCase());
-        console.log(`[LOGIN ATTEMPT] username: ${username.toLowerCase()}, encrypted: ${encryptedEmail}`);
         const user = await User.findOne({
             $or: [
                 { username: username.toLowerCase() },
@@ -164,14 +160,12 @@ router.post('/login', async (req, res) => {
         });
 
         if (!user) {
-            console.log(`[LOGIN FAILED] User not found for: ${username}`);
             return res.status(401).json({ error: 'Username or password is wrong' });
         }
 
         // Check password
         const isMatch = await user.comparePassword(password);
         if (!isMatch) {
-            console.log(`[LOGIN FAILED] Password mismatch for user: ${user.username}`);
             return res.status(401).json({ error: 'Username or password is wrong' });
         }
 
@@ -370,9 +364,8 @@ router.post('/forgot-password', async (req, res) => {
             `
         };
 
-        // Send email
-        await transporter.sendMail(mailOptions);
-        console.log(`Password reset email sent to: ${decryptEmail(user.email)}`);
+        // Send email asynchronously
+        transporter.sendMail(mailOptions).catch(err => console.error('Background email failed:', err.message));
 
         res.json({ message: 'If an account with that email exists, a reset token has been sent.' });
     } catch (error) {
@@ -533,12 +526,11 @@ This token will expire in 1 hour.`,
             `
         };
 
-        try {
-            await transporter.sendMail(mailOptions);
-        } catch (e) {
+        // Send email asynchronously
+        transporter.sendMail(mailOptions).catch(e => {
             console.log(`[DEVELOPMENT ONLY] Resend Verification Requested for ${email}`);
             console.log(`Verification Token/OTP: ${verificationToken}`);
-        }
+        });
 
         res.json({ message: 'Verification code sent.', registrationToken: newRegistrationToken });
     } catch (error) {
