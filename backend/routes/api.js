@@ -110,7 +110,7 @@ router.post('/expenses', async (req, res) => {
                     // Record that the payer 'Given' money to cover the partner's share
                     const lendingRecord = new Lending({
                         userId: req.userId,
-                        name: partner.name || partner.email || 'Workspace Member',
+                        name: partner.firstName || partner.username || partner.email || 'Workspace Member',
                         type: 'Given',
                         amount: sharePerPerson,
                         currency: req.body.currency || 'EUR',
@@ -124,7 +124,7 @@ router.post('/expenses', async (req, res) => {
                     // Record that the partner 'Received' (borrowed) money for their share
                     const partnerLendingRecord = new Lending({
                         userId: partnerId,
-                        name: payer.name || payer.email || 'Workspace Member',
+                        name: payer.firstName || payer.username || payer.email || 'Workspace Member',
                         type: 'Received',
                         amount: sharePerPerson,
                         currency: req.body.currency || 'EUR',
@@ -159,10 +159,20 @@ router.post('/expenses', async (req, res) => {
 });
 
 router.patch('/expenses/:id', async (req, res) => {
-    const oldExpense = await Expense.findOne({ _id: req.params.id, userId: req.userId });
+    let oldExpense = await Expense.findOne({ _id: req.params.id });
     if (!oldExpense) return res.status(404).send();
 
-    const expense = await Expense.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
+    let hasAccess = String(oldExpense.userId) === String(req.userId);
+    if (!hasAccess && oldExpense.workspaceId) {
+        const workspace = await Workspace.findById(oldExpense.workspaceId);
+        if (workspace && workspace.members.some(id => String(id) === String(req.userId))) {
+            hasAccess = true;
+        }
+    }
+    if (!hasAccess) return res.status(403).json({ error: "Unauthorized" });
+
+    const expense = await Expense.findOneAndUpdate({ _id: req.params.id }, req.body, { new: true });
+    if (!expense) return res.status(404).send();
     if (!expense) return res.status(404).send();
 
     // Check if any financial field changed
@@ -174,7 +184,7 @@ router.patch('/expenses/:id', async (req, res) => {
         // Revert old expense deduction
         if (oldExpense.sourceAssetId) {
             try {
-                const oldAsset = await Asset.findOne({ _id: oldExpense.sourceAssetId, userId: req.userId });
+                const oldAsset = await Asset.findOne({ _id: oldExpense.sourceAssetId, userId: oldExpense.userId });
                 if (oldAsset) {
                     const amountToAdd = await convertAmount(oldExpense.amount, oldExpense.currency, oldAsset.currency);
                     oldAsset.value += amountToAdd;
@@ -186,7 +196,7 @@ router.patch('/expenses/:id', async (req, res) => {
         // Apply new expense deduction
         if (expense.sourceAssetId) {
             try {
-                const newAsset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
+                const newAsset = await Asset.findOne({ _id: expense.sourceAssetId, userId: expense.userId });
                 if (newAsset) {
                     const amountToDeduct = await convertAmount(expense.amount, expense.currency, newAsset.currency);
                     newAsset.value -= amountToDeduct;
@@ -200,12 +210,23 @@ router.patch('/expenses/:id', async (req, res) => {
 });
 
 router.delete('/expenses/:id', async (req, res) => {
-    const expense = await Expense.findOneAndDelete({ _id: req.params.id, userId: req.userId });
+    let expense = await Expense.findOne({ _id: req.params.id });
     if (!expense) return res.status(404).send();
+
+    let hasAccess = String(expense.userId) === String(req.userId);
+    if (!hasAccess && expense.workspaceId) {
+        const workspace = await Workspace.findById(expense.workspaceId);
+        if (workspace && workspace.members.some(id => String(id) === String(req.userId))) {
+            hasAccess = true;
+        }
+    }
+    if (!hasAccess) return res.status(403).json({ error: "Unauthorized" });
+
+    await Expense.findByIdAndDelete(expense._id);
 
     if (expense.sourceAssetId) {
         try {
-            const asset = await Asset.findOne({ _id: expense.sourceAssetId, userId: req.userId });
+            const asset = await Asset.findOne({ _id: expense.sourceAssetId, userId: expense.userId });
             if (asset) {
                 const amountToAdd = await convertAmount(expense.amount, expense.currency, asset.currency);
                 asset.value += amountToAdd;
