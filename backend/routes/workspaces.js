@@ -2,6 +2,7 @@ import express from 'express';
 import mongoose from 'mongoose';
 import { Workspace } from '../models/Workspace.js';
 import { User } from '../models/User.js';
+import { Lending } from '../models/Lending.js';
 import { auth } from '../middleware/auth.js';
 import nodemailer from 'nodemailer';
 import { decryptEmail, encryptEmail } from '../utils/encryption.js';
@@ -182,6 +183,13 @@ router.post('/:id/leave', async (req, res) => {
         }
 
         await Workspace.findByIdAndUpdate(workspaceId, { $pull: { members: req.userId } });
+        
+        try {
+            await Lending.deleteMany({ workspaceId: workspaceId, userId: req.userId });
+        } catch (e) {
+            console.error('Failed to clean up lending records when leaving workspace:', e);
+        }
+
         res.json({ message: 'Left workspace successfully' });
     } catch (error) {
         res.status(500).json({ error: 'Failed to leave workspace' });

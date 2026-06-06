@@ -4,6 +4,7 @@ import { Expense } from '../models/Expense.js';
 import { Lending } from '../models/Lending.js';
 import { auth } from '../middleware/auth.js';
 import { Workspace } from '../models/Workspace.js';
+import { User } from '../models/User.js';
 import { ExchangeRate } from '../models/ExchangeRate.js';
 import { RecurringExpense } from '../models/RecurringExpense.js';
 import { Budget } from '../models/Budget.js';
@@ -87,6 +88,9 @@ router.get('/expenses', async (req, res) => {
 router.post('/expenses', async (req, res) => {
     const expenseData = { ...req.body, userId: req.userId };
     
+    const expense = new Expense(expenseData);
+    await expense.save();
+
     // Calculate Splitwise logic if it's an equal shared expense
     if (req.body.workspaceId && req.body.splitType === 'equal') {
         try {
@@ -97,28 +101,37 @@ router.post('/expenses', async (req, res) => {
                 
                 const partners = workspace.members.filter(id => String(id) !== String(req.userId));
                 
+                const payer = await User.findById(req.userId);
+                
                 for (const partnerId of partners) {
+                    const partner = await User.findById(partnerId);
+                    if (!partner) continue;
+
                     // Record that the payer 'Given' money to cover the partner's share
                     const lendingRecord = new Lending({
                         userId: req.userId,
-                        name: `Split: ${req.body.category || 'Expense'}`,
+                        name: partner.name || partner.email || 'Workspace Member',
                         type: 'Given',
                         amount: sharePerPerson,
                         currency: req.body.currency || 'EUR',
                         date: req.body.date || new Date(),
-                        notes: `Equal split from ${workspace.name} workspace.`
+                        notes: `Equal split from ${workspace.name} workspace.`,
+                        workspaceId: workspace._id,
+                        expenseId: expense._id
                     });
                     await lendingRecord.save();
 
                     // Record that the partner 'Received' (borrowed) money for their share
                     const partnerLendingRecord = new Lending({
                         userId: partnerId,
-                        name: `Split: ${req.body.category || 'Expense'}`,
+                        name: payer.name || payer.email || 'Workspace Member',
                         type: 'Received',
                         amount: sharePerPerson,
                         currency: req.body.currency || 'EUR',
                         date: req.body.date || new Date(),
-                        notes: `Equal split from ${workspace.name} workspace.`
+                        notes: `Equal split from ${workspace.name} workspace.`,
+                        workspaceId: workspace._id,
+                        expenseId: expense._id
                     });
                     await partnerLendingRecord.save();
                 }
@@ -127,9 +140,6 @@ router.post('/expenses', async (req, res) => {
             console.error('Failed to create split lending records:', error);
         }
     }
-
-    const expense = new Expense(expenseData);
-    await expense.save();
 
     if (expense.sourceAssetId) {
         try {
@@ -204,6 +214,13 @@ router.delete('/expenses/:id', async (req, res) => {
         } catch (e) {}
     }
 
+    // Delete any associated split lending records
+    try {
+        await Lending.deleteMany({ expenseId: req.params.id });
+    } catch (e) {
+        console.error('Failed to delete associated lending records:', e);
+    }
+
     res.status(204).send();
 });
 
@@ -229,6 +246,15 @@ router.delete('/lendings/:id', async (req, res) => {
     const lending = await Lending.findOneAndDelete({ _id: req.params.id, userId: req.userId });
     if (!lending) return res.status(404).send();
     res.status(204).send();
+});
+
+router.post('/lendings/settle/:name', async (req, res) => {
+    try {
+        await Lending.deleteMany({ userId: req.userId, name: req.params.name });
+        res.status(200).json({ message: 'Settled successfully' });
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to settle lendings' });
+    }
 });
 
 router.get('/exchangeRate/:id', async (req, res) => {

@@ -9,6 +9,8 @@ const lendingSchema = new mongoose.Schema({
     status: { type: String, enum: ['Pending', 'Settled'], default: 'Pending' },
     date: { type: Date, required: true },
     notes: { type: String },
+    workspaceId: { type: mongoose.Schema.Types.ObjectId, ref: 'Workspace', default: null },
+    expenseId: { type: mongoose.Schema.Types.ObjectId, ref: 'Expense', default: null },
     createdAt: { type: Date, default: Date.now }
 });
 
