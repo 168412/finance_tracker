@@ -147,8 +147,7 @@ router.post('/expenses', async (req, res) => {
             const asset = await Asset.findOne(assetQuery);
             if (asset) {
                 const amountToDeduct = await convertAmount(expense.amount, expense.currency, asset.currency);
-                asset.value -= amountToDeduct;
-                await asset.save();
+                await Asset.updateOne(assetQuery, { $inc: { value: -amountToDeduct } });
             }
         } catch (e) {
             console.error('Failed to update asset on POST', e);
@@ -187,8 +186,7 @@ router.patch('/expenses/:id', async (req, res) => {
                 const oldAsset = await Asset.findOne({ _id: oldExpense.sourceAssetId, userId: oldExpense.userId });
                 if (oldAsset) {
                     const amountToAdd = await convertAmount(oldExpense.amount, oldExpense.currency, oldAsset.currency);
-                    oldAsset.value += amountToAdd;
-                    await oldAsset.save();
+                    await Asset.updateOne({ _id: oldAsset._id }, { $inc: { value: amountToAdd } });
                 }
             } catch (e) {}
         }
@@ -199,8 +197,7 @@ router.patch('/expenses/:id', async (req, res) => {
                 const newAsset = await Asset.findOne({ _id: expense.sourceAssetId, userId: expense.userId });
                 if (newAsset) {
                     const amountToDeduct = await convertAmount(expense.amount, expense.currency, newAsset.currency);
-                    newAsset.value -= amountToDeduct;
-                    await newAsset.save();
+                    await Asset.updateOne({ _id: newAsset._id }, { $inc: { value: -amountToDeduct } });
                 }
             } catch (e) {}
         }
@@ -229,8 +226,7 @@ router.delete('/expenses/:id', async (req, res) => {
             const asset = await Asset.findOne({ _id: expense.sourceAssetId, userId: expense.userId });
             if (asset) {
                 const amountToAdd = await convertAmount(expense.amount, expense.currency, asset.currency);
-                asset.value += amountToAdd;
-                await asset.save();
+                await Asset.updateOne({ _id: asset._id }, { $inc: { value: amountToAdd } });
             }
         } catch (e) {}
     }
