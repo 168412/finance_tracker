@@ -1,11 +1,22 @@
 import { RecurringExpense } from '../models/RecurringExpense.js';
 import { Expense } from '../models/Expense.js';
 import { Asset } from '../models/Asset.js';
+import { ExchangeRate } from '../models/ExchangeRate.js';
 
 // Map to track the last time we checked for a user (userId -> timestamp)
 const lastCheckMap = new Map();
 // Set to track active evaluations to prevent concurrent runs
 const runningChecks = new Set();
+
+// Helper to convert currency
+const convertAmount = async (amount, fromCur, toCur) => {
+    if (!fromCur || !toCur || fromCur === toCur) return amount;
+    const rateDoc = await ExchangeRate.findOne({ id: '1' });
+    const rates = rateDoc && rateDoc.rates ? rateDoc.rates : { EUR: 1, USD: 1.08, GBP: 0.85, INR: 90 };
+    const rateFrom = fromCur === 'EUR' ? 1 : (rates[fromCur] || 1);
+    const rateTo = toCur === 'EUR' ? 1 : (rates[toCur] || 1);
+    return amount * (rateTo / rateFrom);
+};
 
 export const evaluateRecurringExpenses = async (userId) => {
     const userIdStr = userId.toString();
@@ -53,7 +64,8 @@ export const evaluateRecurringExpenses = async (userId) => {
                 if (recurring.sourceAssetId) {
                     const asset = await Asset.findOne({ _id: recurring.sourceAssetId, userId: recurring.userId });
                     if (asset) {
-                        asset.balance -= recurring.amount;
+                        const amountToDeduct = await convertAmount(recurring.amount, recurring.currency, asset.currency);
+                        asset.value -= amountToDeduct;
                         await asset.save();
                     }
                 }
