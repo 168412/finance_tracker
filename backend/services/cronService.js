@@ -4,16 +4,28 @@ import { Asset } from '../models/Asset.js';
 
 // Map to track the last time we checked for a user (userId -> timestamp)
 const lastCheckMap = new Map();
+// Set to track active evaluations to prevent concurrent runs
+const runningChecks = new Set();
 
 export const evaluateRecurringExpenses = async (userId) => {
+    const userIdStr = userId.toString();
     try {
         const now = Date.now();
-        const lastCheck = lastCheckMap.get(userId.toString());
+        
+        // Prevent concurrent evaluations for the same user
+        if (runningChecks.has(userIdStr)) {
+            return;
+        }
+
+        const lastCheck = lastCheckMap.get(userIdStr);
 
         // If we checked within the last 24 hours, skip
         if (lastCheck && now - lastCheck < 24 * 60 * 60 * 1000) {
             return;
         }
+
+        // Lock execution
+        runningChecks.add(userIdStr);
 
         const today = new Date();
         
@@ -68,9 +80,12 @@ export const evaluateRecurringExpenses = async (userId) => {
         }
 
         // Update the last check time for this user
-        lastCheckMap.set(userId.toString(), now);
+        lastCheckMap.set(userIdStr, now);
 
     } catch (error) {
         console.error(`[LazyCron] Error running lazy recurring processing for user ${userId}:`, error);
+    } finally {
+        // Always release the lock
+        runningChecks.delete(userIdStr);
     }
 };
