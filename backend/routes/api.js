@@ -2,7 +2,9 @@ import express from 'express';
 import { Asset } from '../models/Asset.js';
 import { Expense } from '../models/Expense.js';
 import { Lending } from '../models/Lending.js';
+import { Transfer } from '../models/Transfer.js';
 import { auth } from '../middleware/auth.js';
+
 import { Workspace } from '../models/Workspace.js';
 import { User } from '../models/User.js';
 import { ExchangeRate } from '../models/ExchangeRate.js';
@@ -78,7 +80,100 @@ router.delete('/assets/:id', async (req, res) => {
     res.status(204).send();
 });
 
+// --- Asset Transfers ---
+router.post('/assets/transfer', async (req, res) => {
+    const { sourceAssetId, targetAssetId, amount, description, date } = req.body;
+    if (!sourceAssetId || !targetAssetId || !amount) {
+        return res.status(400).json({ error: 'Source asset, target asset, and amount are required' });
+    }
+
+    const amtNum = parseFloat(amount);
+    if (isNaN(amtNum) || amtNum <= 0) {
+        return res.status(400).json({ error: 'Amount must be a positive number' });
+    }
+
+    if (sourceAssetId === targetAssetId) {
+        return res.status(400).json({ error: 'Source and target assets must be different' });
+    }
+
+    try {
+        const sourceAsset = await Asset.findOne({ _id: sourceAssetId, userId: req.userId });
+        const targetAsset = await Asset.findOne({ _id: targetAssetId, userId: req.userId });
+
+        if (!sourceAsset || !targetAsset) {
+            return res.status(404).json({ error: 'Source or target asset not found' });
+        }
+
+        // Convert amount to target currency if currencies are different
+        const converted = await convertAmount(amtNum, sourceAsset.currency, targetAsset.currency);
+
+        // Update assets
+        sourceAsset.value -= amtNum;
+        targetAsset.value += converted;
+
+        await sourceAsset.save();
+        await targetAsset.save();
+
+        // Create transfer log
+        const transfer = new Transfer({
+            userId: req.userId,
+            sourceAssetId: sourceAsset._id,
+            targetAssetId: targetAsset._id,
+            sourceAssetName: sourceAsset.name,
+            targetAssetName: targetAsset.name,
+            amount: amtNum,
+            sourceCurrency: sourceAsset.currency,
+            targetCurrency: targetAsset.currency,
+            convertedAmount: converted,
+            date: date ? new Date(date) : new Date(),
+            description: description || ''
+        });
+
+        await transfer.save();
+
+        res.status(201).json(formatDoc(transfer));
+    } catch (e) {
+        console.error('Transfer failed:', e);
+        res.status(500).json({ error: 'Transfer failed' });
+    }
+});
+
+router.get('/assets/transfers', async (req, res) => {
+    try {
+        const transfers = await Transfer.find({ userId: req.userId }).sort({ date: -1 });
+        res.json(transfers.map(formatDoc));
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to fetch transfers' });
+    }
+});
+
+router.delete('/assets/transfers/:id', async (req, res) => {
+    try {
+        const transfer = await Transfer.findOne({ _id: req.params.id, userId: req.userId });
+        if (!transfer) return res.status(404).json({ error: 'Transfer not found' });
+
+        const sourceAsset = await Asset.findOne({ _id: transfer.sourceAssetId, userId: req.userId });
+        const targetAsset = await Asset.findOne({ _id: transfer.targetAssetId, userId: req.userId });
+
+        if (sourceAsset) {
+            sourceAsset.value += transfer.amount;
+            await sourceAsset.save();
+        }
+        if (targetAsset) {
+            targetAsset.value -= transfer.convertedAmount;
+            await targetAsset.save();
+        }
+
+        await Transfer.deleteOne({ _id: transfer._id });
+        res.status(204).send();
+    } catch (e) {
+        console.error('Failed to revert transfer:', e);
+        res.status(500).json({ error: 'Failed to revert transfer' });
+    }
+});
+
 // --- Expenses ---
+
 router.get('/expenses', async (req, res) => {
     const query = req.query.workspaceId ? { workspaceId: req.query.workspaceId } : { userId: req.userId, $or: [{ workspaceId: null }, { workspaceId: { $exists: false } }] };
     const expenses = await Expense.find(query);
