@@ -3,6 +3,7 @@ import { Asset } from '../models/Asset.js';
 import { Expense } from '../models/Expense.js';
 import { Lending } from '../models/Lending.js';
 import { Transfer } from '../models/Transfer.js';
+import { Goal } from '../models/Goal.js';
 import { auth } from '../middleware/auth.js';
 
 import { Workspace } from '../models/Workspace.js';
@@ -169,6 +170,62 @@ router.delete('/assets/transfers/:id', async (req, res) => {
     } catch (e) {
         console.error('Failed to revert transfer:', e);
         res.status(500).json({ error: 'Failed to revert transfer' });
+    }
+});
+
+// --- Savings Goals ---
+router.get('/goals', async (req, res) => {
+    try {
+        const goals = await Goal.find({ userId: req.userId });
+        res.json(goals.map(formatDoc));
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to fetch goals' });
+    }
+});
+
+router.post('/goals', async (req, res) => {
+    const { name, targetAmount, currentAmount, currency, targetDate, linkedAssetId } = req.body;
+    if (!name || !targetAmount) {
+        return res.status(400).json({ error: 'Name and target amount are required' });
+    }
+    try {
+        const goal = new Goal({
+            userId: req.userId,
+            name,
+            targetAmount: parseFloat(targetAmount),
+            currentAmount: currentAmount ? parseFloat(currentAmount) : 0,
+            currency: currency || 'EUR',
+            targetDate: targetDate ? new Date(targetDate) : undefined,
+            linkedAssetId: linkedAssetId || null
+        });
+        await goal.save();
+        res.status(201).json(formatDoc(goal));
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to create goal' });
+    }
+});
+
+router.patch('/goals/:id', async (req, res) => {
+    try {
+        const goal = await Goal.findOneAndUpdate(
+            { _id: req.params.id, userId: req.userId },
+            req.body,
+            { new: true }
+        );
+        if (!goal) return res.status(404).json({ error: 'Goal not found' });
+        res.json(formatDoc(goal));
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to update goal' });
+    }
+});
+
+router.delete('/goals/:id', async (req, res) => {
+    try {
+        const result = await Goal.deleteOne({ _id: req.params.id, userId: req.userId });
+        if (result.deletedCount === 0) return res.status(404).json({ error: 'Goal not found' });
+        res.status(204).send();
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to delete goal' });
     }
 });
 
