@@ -39,7 +39,23 @@ async function generateAIText(prompt) {
     } else {
         const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
         const model = genAI.getGenerativeModel({ model: process.env.GEMINI_MODEL || "gemini-2.5-flash" });
-        const result = await model.generateContent(prompt);
+        
+        let result;
+        let retries = 3;
+        while (retries > 0) {
+            try {
+                result = await model.generateContent(prompt);
+                break;
+            } catch (error) {
+                if (error.status === 503 && retries > 1) {
+                    console.log(`Gemini 503 error, retrying... (${retries - 1} attempts left)`);
+                    retries--;
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                } else {
+                    throw error;
+                }
+            }
+        }
         return result.response.text();
     }
 }
@@ -102,6 +118,53 @@ router.post('/chat', checkAIEnabled, async (req, res) => {
     } catch (error) {
         console.error('Error in chat:', error);
         res.status(500).json({ error: 'Failed to process chat message' });
+    }
+});
+
+router.post('/budget-planner', checkAIEnabled, async (req, res) => {
+    try {
+        const { expenses, userLanguage } = req.body;
+        
+        // Group expenses by category and calculate monthly average over the last 3 months
+        const now = new Date();
+        const threeMonthsAgo = new Date();
+        threeMonthsAgo.setMonth(now.getMonth() - 3);
+        
+        const recentExpenses = expenses.filter(e => new Date(e.date) >= threeMonthsAgo);
+        const categoryTotals = {};
+        
+        recentExpenses.forEach(e => {
+            if (!categoryTotals[e.category]) categoryTotals[e.category] = 0;
+            categoryTotals[e.category] += e.amount;
+        });
+        
+        const categoryAverages = Object.keys(categoryTotals).map(cat => ({
+            category: cat,
+            avgMonthlySpend: Math.round(categoryTotals[cat] / 3)
+        }));
+
+        const prompt = `You are a financial AI assistant. Analyze these monthly average spending patterns based on the last 3 months: ${JSON.stringify(categoryAverages)}.
+        Suggest a reasonable monthly budget limit for each category.
+        Provide a short reason for each suggestion in ${getLanguageName(userLanguage)}.
+        IMPORTANT: Respond ONLY with a valid JSON array. Do not wrap it in markdown code blocks.
+        Format:
+        [
+          {
+            "category": "Food",
+            "avgMonthlySpend": 450,
+            "suggestedBudget": 400,
+            "reason": "You spend a bit high on food, try cooking more."
+          }
+        ]`;
+
+        let responseText = await generateAIText(prompt);
+        if (responseText.startsWith('```json')) responseText = responseText.replace(/```json\n?/, '').replace(/```\n?$/, '');
+        
+        const suggestions = JSON.parse(responseText.trim());
+        res.json({ suggestions, aiEnabled: true });
+    } catch (error) {
+        console.error('Error generating budget planner suggestions:', error);
+        res.status(500).json({ error: 'Failed to generate budget suggestions' });
     }
 });
 

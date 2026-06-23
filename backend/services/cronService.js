@@ -1,7 +1,10 @@
 import { RecurringExpense } from '../models/RecurringExpense.js';
+import { RecurringTransfer } from '../models/RecurringTransfer.js';
 import { Expense } from '../models/Expense.js';
+import { Transfer } from '../models/Transfer.js';
 import { Asset } from '../models/Asset.js';
 import { ExchangeRate } from '../models/ExchangeRate.js';
+import { fetchTickerPrice } from '../routes/api.js';
 
 // Map to track the last time we checked for a user (userId -> timestamp)
 const lastCheckMap = new Map();
@@ -88,6 +91,89 @@ export const evaluateRecurringExpenses = async (userId) => {
                 console.log(`[LazyCron] Processed ${recurring.name} for user ${recurring.userId}`);
             } catch (err) {
                 console.error(`[LazyCron] Failed to process recurring expense ${recurring._id}:`, err);
+            }
+        }
+
+        // --- Recurring Transfers (Auto-Invest) ---
+        const dueTransfers = await RecurringTransfer.find({ userId, nextTransferDate: { $lte: today } });
+
+        if (dueTransfers.length > 0) {
+            console.log(`[LazyCron] Found ${dueTransfers.length} recurring transfers due for user ${userId}.`);
+        }
+
+        for (const recurring of dueTransfers) {
+            try {
+                const sourceAsset = await Asset.findOne({ _id: recurring.sourceAssetId, userId: recurring.userId });
+                const targetAsset = await Asset.findOne({ _id: recurring.targetAssetId, userId: recurring.userId });
+
+                if (!sourceAsset || !targetAsset) {
+                    console.error(`[LazyCron] Failed to process auto-invest ${recurring._id}: Source or Target asset missing.`);
+                    continue;
+                }
+
+                // Convert amount to target currency if currencies are different
+                const converted = await convertAmount(recurring.amount, sourceAsset.currency, targetAsset.currency);
+
+                // Handle source asset (if investment)
+                if (sourceAsset.category === 'Investments' && sourceAsset.tickerSymbol) {
+                    const priceData = await fetchTickerPrice(sourceAsset.tickerSymbol);
+                    const livePrice = priceData ? priceData.price : (sourceAsset.purchasePrice || 1);
+                    const removedQty = recurring.amount / livePrice;
+                    sourceAsset.quantity = Math.max(0, (sourceAsset.quantity || 0) - removedQty);
+                }
+                sourceAsset.value -= recurring.amount;
+
+                // Handle target asset (if investment)
+                if (targetAsset.category === 'Investments' && targetAsset.tickerSymbol) {
+                    const priceData = await fetchTickerPrice(targetAsset.tickerSymbol);
+                    const livePrice = priceData ? priceData.price : (targetAsset.purchasePrice || 1);
+                    const addedQty = converted / livePrice;
+                    const oldQty = targetAsset.quantity || 0;
+                    const oldCost = targetAsset.purchasePrice || livePrice;
+                    const newQty = oldQty + addedQty;
+                    targetAsset.purchasePrice = newQty > 0 ? ((oldQty * oldCost) + converted) / newQty : oldCost;
+                    targetAsset.quantity = newQty;
+                }
+                targetAsset.value += converted;
+
+                await sourceAsset.save();
+                await targetAsset.save();
+
+                // Create transfer log
+                const transfer = new Transfer({
+                    userId: recurring.userId,
+                    sourceAssetId: sourceAsset._id,
+                    targetAssetId: targetAsset._id,
+                    sourceAssetName: sourceAsset.name,
+                    targetAssetName: targetAsset.name,
+                    amount: recurring.amount,
+                    sourceCurrency: sourceAsset.currency,
+                    targetCurrency: targetAsset.currency,
+                    convertedAmount: converted,
+                    date: recurring.nextTransferDate,
+                    description: `[Auto-Invest] ${recurring.description || ''}`.trim()
+                });
+
+                await transfer.save();
+
+                // Advance the next transfer date
+                let nextDate = new Date(recurring.nextTransferDate);
+                while (nextDate <= today) {
+                    if (recurring.frequency === 'yearly') {
+                        nextDate.setFullYear(nextDate.getFullYear() + 1);
+                    } else if (recurring.frequency === 'weekly') {
+                        nextDate.setDate(nextDate.getDate() + 7);
+                    } else {
+                        nextDate.setMonth(nextDate.getMonth() + 1);
+                    }
+                }
+                
+                recurring.nextTransferDate = nextDate;
+                await recurring.save();
+
+                console.log(`[LazyCron] Processed auto-invest ${recurring._id} for user ${recurring.userId}`);
+            } catch (err) {
+                console.error(`[LazyCron] Failed to process auto-invest ${recurring._id}:`, err);
             }
         }
 

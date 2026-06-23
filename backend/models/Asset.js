@@ -7,6 +7,9 @@ const assetSchema = new mongoose.Schema({
     category: { type: String, required: true },
     value: { type: Number, required: true },
     currency: { type: String, default: 'EUR' },
+    tickerSymbol: { type: String, default: null },
+    quantity: { type: Number, default: null },
+    purchasePrice: { type: Number, default: null },
     createdAt: { type: Date, default: Date.now }
 });
 

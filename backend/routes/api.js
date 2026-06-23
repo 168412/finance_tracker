@@ -2,6 +2,7 @@ import express from 'express';
 import { Asset } from '../models/Asset.js';
 import { Expense } from '../models/Expense.js';
 import { Lending } from '../models/Lending.js';
+import { PriceCache } from '../models/PriceCache.js';
 import { Transfer } from '../models/Transfer.js';
 import { Goal } from '../models/Goal.js';
 import { auth } from '../middleware/auth.js';
@@ -10,6 +11,7 @@ import { Workspace } from '../models/Workspace.js';
 import { User } from '../models/User.js';
 import { ExchangeRate } from '../models/ExchangeRate.js';
 import { RecurringExpense } from '../models/RecurringExpense.js';
+import { RecurringTransfer } from '../models/RecurringTransfer.js';
 import { Budget } from '../models/Budget.js';
 import { evaluateRecurringExpenses } from '../services/cronService.js';
 import multer from 'multer';
@@ -81,6 +83,118 @@ router.delete('/assets/:id', async (req, res) => {
     res.status(204).send();
 });
 
+export const fetchTickerPrice = async (ticker, forceRefresh = false) => {
+    if (!ticker) return null;
+    const now = Date.now();
+
+    if (!forceRefresh) {
+        try {
+            const cacheEntry = await PriceCache.findOne({ ticker });
+            // Check cache (24 hours = 86400000 ms)
+            if (cacheEntry && now - new Date(cacheEntry.updatedAt).getTime() < 86400000) {
+                return {
+                    price: cacheEntry.price,
+                    name: cacheEntry.name,
+                    currency: cacheEntry.currency
+                };
+            }
+        } catch (e) {
+            console.error('Failed to read price cache from DB:', e);
+        }
+    }
+
+    try {
+        const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=1d&range=1d`;
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'application/json'
+            }
+        });
+        if (!response.ok) {
+            console.error(`Yahoo Finance returned ${response.status} for ${ticker}`);
+            return null;
+        }
+        
+        const data = await response.json();
+        const meta = data?.chart?.result?.[0]?.meta;
+        if (meta && meta.regularMarketPrice) {
+            const priceData = {
+                price: meta.regularMarketPrice,
+                name: meta.longName || meta.shortName || ticker,
+                currency: meta.currency
+            };
+            
+            try {
+                await PriceCache.findOneAndUpdate(
+                    { ticker },
+                    { ticker, price: priceData.price, name: priceData.name, currency: priceData.currency, updatedAt: new Date() },
+                    { upsert: true, new: true }
+                );
+            } catch (e) {
+                console.error('Failed to save price cache to DB:', e);
+            }
+            return priceData;
+        }
+    } catch (error) {
+        console.error(`Failed to fetch price for ${ticker}:`, error);
+    }
+    return null;
+};
+
+router.post('/assets/prices', async (req, res) => {
+    const { tickers, forceRefresh } = req.body;
+    if (!tickers || !Array.isArray(tickers)) {
+        return res.status(400).json({ error: 'Tickers array is required' });
+    }
+
+    const results = {};
+    for (const ticker of tickers) {
+        results[ticker] = await fetchTickerPrice(ticker, forceRefresh);
+    }
+
+    res.json(results);
+});
+
+router.get('/assets/search-ticker', async (req, res) => {
+    const { q } = req.query;
+    if (!q || q.length < 2) {
+        return res.json([]);
+    }
+    
+    try {
+        const url = `https://query2.finance.yahoo.com/v1/finance/search?q=${encodeURIComponent(q)}&quotesCount=5&newsCount=0`;
+        const response = await fetch(url, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'application/json'
+            }
+        });
+        
+        if (!response.ok) {
+            console.error(`Yahoo Search returned ${response.status}`);
+            return res.status(500).json({ error: 'Failed to search tickers' });
+        }
+        
+        const data = await response.json();
+        const quotes = data?.quotes || [];
+        
+        const results = quotes
+            .filter(quote => quote.quoteType === 'ETF' || quote.quoteType === 'MUTUALFUND' || quote.quoteType === 'EQUITY' || quote.quoteType === 'CRYPTOCURRENCY')
+            .map(quote => ({
+                symbol: quote.symbol,
+                name: quote.shortname || quote.longname || quote.symbol,
+                exchange: quote.exchDisp,
+                type: quote.quoteType
+            }));
+            
+        res.json(results);
+    } catch (error) {
+        console.error('Ticker search error:', error);
+        res.status(500).json({ error: 'Failed to search tickers' });
+    }
+});
+
 // --- Asset Transfers ---
 router.post('/assets/transfer', async (req, res) => {
     const { sourceAssetId, targetAssetId, amount, description, date } = req.body;
@@ -108,8 +222,26 @@ router.post('/assets/transfer', async (req, res) => {
         // Convert amount to target currency if currencies are different
         const converted = await convertAmount(amtNum, sourceAsset.currency, targetAsset.currency);
 
-        // Update assets
+        // Handle source asset (if investment)
+        if (sourceAsset.category === 'Investments' && sourceAsset.tickerSymbol) {
+            const priceData = await fetchTickerPrice(sourceAsset.tickerSymbol);
+            const livePrice = priceData ? priceData.price : (sourceAsset.purchasePrice || 1);
+            const removedQty = amtNum / livePrice;
+            sourceAsset.quantity = Math.max(0, (sourceAsset.quantity || 0) - removedQty);
+        }
         sourceAsset.value -= amtNum;
+
+        // Handle target asset (if investment)
+        if (targetAsset.category === 'Investments' && targetAsset.tickerSymbol) {
+            const priceData = await fetchTickerPrice(targetAsset.tickerSymbol);
+            const livePrice = priceData ? priceData.price : (targetAsset.purchasePrice || 1);
+            const addedQty = converted / livePrice;
+            const oldQty = targetAsset.quantity || 0;
+            const oldCost = targetAsset.purchasePrice || livePrice;
+            const newQty = oldQty + addedQty;
+            targetAsset.purchasePrice = newQty > 0 ? ((oldQty * oldCost) + converted) / newQty : oldCost;
+            targetAsset.quantity = newQty;
+        }
         targetAsset.value += converted;
 
         await sourceAsset.save();
@@ -157,10 +289,26 @@ router.delete('/assets/transfers/:id', async (req, res) => {
         const targetAsset = await Asset.findOne({ _id: transfer.targetAssetId, userId: req.userId });
 
         if (sourceAsset) {
+            if (sourceAsset.category === 'Investments' && sourceAsset.tickerSymbol) {
+                const priceData = await fetchTickerPrice(sourceAsset.tickerSymbol);
+                const livePrice = priceData ? priceData.price : (sourceAsset.purchasePrice || 1);
+                const addedBackQty = transfer.amount / livePrice;
+                const oldQty = sourceAsset.quantity || 0;
+                const oldCost = sourceAsset.purchasePrice || livePrice;
+                const newQty = oldQty + addedBackQty;
+                sourceAsset.purchasePrice = newQty > 0 ? ((oldQty * oldCost) + transfer.amount) / newQty : oldCost;
+                sourceAsset.quantity = newQty;
+            }
             sourceAsset.value += transfer.amount;
             await sourceAsset.save();
         }
         if (targetAsset) {
+            if (targetAsset.category === 'Investments' && targetAsset.tickerSymbol) {
+                const priceData = await fetchTickerPrice(targetAsset.tickerSymbol);
+                const livePrice = priceData ? priceData.price : (targetAsset.purchasePrice || 1);
+                const removedQty = transfer.convertedAmount / livePrice;
+                targetAsset.quantity = Math.max(0, (targetAsset.quantity || 0) - removedQty);
+            }
             targetAsset.value -= transfer.convertedAmount;
             await targetAsset.save();
         }
@@ -400,27 +548,112 @@ router.get('/lendings', async (req, res) => {
 });
 
 router.post('/lendings', async (req, res) => {
-    const lending = new Lending({ ...req.body, userId: req.userId });
-    await lending.save();
-    res.status(201).json(formatDoc(lending));
+    try {
+        const lending = new Lending({ ...req.body, userId: req.userId });
+        
+        if (lending.sourceAssetId) {
+            try {
+                const asset = await Asset.findOne({ _id: lending.sourceAssetId, userId: lending.userId });
+                if (asset) {
+                    const convertedAmount = await convertAmount(lending.amount, lending.currency, asset.currency);
+                    const modifier = lending.type === 'Given' ? -1 : 1;
+                    await Asset.updateOne({ _id: asset._id }, { $inc: { value: convertedAmount * modifier } });
+                }
+            } catch (e) {
+                console.error('Failed to update asset on POST lending', e);
+            }
+        }
+        
+        await lending.save();
+        res.status(201).json(formatDoc(lending));
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to create lending' });
+    }
 });
 
 router.patch('/lendings/:id', async (req, res) => {
-    const lending = await Lending.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
-    if (!lending) return res.status(404).send();
-    res.json(formatDoc(lending));
+    try {
+        let oldLending = await Lending.findOne({ _id: req.params.id, userId: req.userId });
+        if (!oldLending) return res.status(404).send();
+
+        const lending = await Lending.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
+        if (!lending) return res.status(404).send();
+
+        const amountChanged = oldLending.amount !== lending.amount;
+        const currencyChanged = oldLending.currency !== lending.currency;
+        const assetChanged = String(oldLending.sourceAssetId || '') !== String(lending.sourceAssetId || '');
+        const typeChanged = oldLending.type !== lending.type;
+
+        if (amountChanged || currencyChanged || assetChanged || typeChanged) {
+            if (oldLending.sourceAssetId) {
+                try {
+                    const oldAsset = await Asset.findOne({ _id: oldLending.sourceAssetId, userId: req.userId });
+                    if (oldAsset) {
+                        const amountToRevert = await convertAmount(oldLending.amount, oldLending.currency, oldAsset.currency);
+                        const revertModifier = oldLending.type === 'Given' ? 1 : -1;
+                        await Asset.updateOne({ _id: oldAsset._id }, { $inc: { value: amountToRevert * revertModifier } });
+                    }
+                } catch (e) {}
+            }
+            if (lending.sourceAssetId) {
+                try {
+                    const newAsset = await Asset.findOne({ _id: lending.sourceAssetId, userId: req.userId });
+                    if (newAsset) {
+                        const amountToApply = await convertAmount(lending.amount, lending.currency, newAsset.currency);
+                        const applyModifier = lending.type === 'Given' ? -1 : 1;
+                        await Asset.updateOne({ _id: newAsset._id }, { $inc: { value: amountToApply * applyModifier } });
+                    }
+                } catch (e) {}
+            }
+        }
+        res.json(formatDoc(lending));
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to update lending' });
+    }
 });
 
 router.delete('/lendings/:id', async (req, res) => {
-    const lending = await Lending.findOneAndDelete({ _id: req.params.id, userId: req.userId });
-    if (!lending) return res.status(404).send();
-    res.status(204).send();
+    try {
+        const lending = await Lending.findOne({ _id: req.params.id, userId: req.userId });
+        if (!lending) return res.status(404).send();
+
+        if (lending.sourceAssetId) {
+            try {
+                const asset = await Asset.findOne({ _id: lending.sourceAssetId, userId: req.userId });
+                if (asset) {
+                    const amountToRevert = await convertAmount(lending.amount, lending.currency, asset.currency);
+                    const revertModifier = lending.type === 'Given' ? 1 : -1;
+                    await Asset.updateOne({ _id: asset._id }, { $inc: { value: amountToRevert * revertModifier } });
+                }
+            } catch (e) {}
+        }
+
+        await Lending.deleteOne({ _id: lending._id });
+        res.status(204).send();
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to delete lending' });
+    }
 });
 
 router.post('/lendings/settle/:name', async (req, res) => {
     try {
-        // Delete current user's records of the partner
-        await Lending.deleteMany({ userId: req.userId, name: req.params.name });
+        const { targetAssetId, netBalance, currency } = req.body;
+
+        // Apply net balance to target asset if specified
+        if (targetAssetId && netBalance !== 0) {
+            try {
+                const asset = await Asset.findOne({ _id: targetAssetId, userId: req.userId });
+                if (asset) {
+                    const amountToApply = await convertAmount(netBalance, currency || 'EUR', asset.currency);
+                    await Asset.updateOne({ _id: asset._id }, { $inc: { value: amountToApply } });
+                }
+            } catch (e) {
+                console.error('Failed to apply net balance to asset during settle', e);
+            }
+        }
+
+        // Mark current user's records of the partner as settled instead of deleting
+        await Lending.updateMany({ userId: req.userId, name: req.params.name }, { $set: { isSettled: true } });
 
         // Try to find the partner user by the name string
         const partnerName = req.params.name;
@@ -552,6 +785,48 @@ router.delete('/recurring/:id', async (req, res) => {
         res.status(204).send();
     } catch (error) {
         res.status(500).json({ error: 'Failed to delete recurring expense' });
+    }
+});
+
+// --- Recurring Transfers (Auto-Invest) ---
+router.get('/recurring-transfers', async (req, res) => {
+    try {
+        const transfers = await RecurringTransfer.find({ userId: req.userId });
+        res.json(transfers.map(formatDoc));
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to fetch recurring transfers' });
+    }
+});
+
+router.post('/recurring-transfers', async (req, res) => {
+    try {
+        const { id, _id, ...bodyData } = req.body;
+        const transfer = new RecurringTransfer({ ...bodyData, userId: req.userId });
+        await transfer.save();
+        res.status(201).json(formatDoc(transfer));
+    } catch (error) {
+        console.error('Failed to create recurring transfer:', error);
+        res.status(500).json({ error: 'Failed to create recurring transfer' });
+    }
+});
+
+router.put('/recurring-transfers/:id', async (req, res) => {
+    try {
+        const transfer = await RecurringTransfer.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, req.body, { new: true });
+        if (transfer) res.json(formatDoc(transfer));
+        else res.status(404).json({ error: 'Recurring transfer not found' });
+    } catch (error) {
+        console.error('Failed to update recurring transfer:', error);
+        res.status(500).json({ error: 'Failed to update recurring transfer' });
+    }
+});
+
+router.delete('/recurring-transfers/:id', async (req, res) => {
+    try {
+        await RecurringTransfer.findOneAndDelete({ _id: req.params.id, userId: req.userId });
+        res.status(204).send();
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to delete recurring transfer' });
     }
 });
 

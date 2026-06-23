@@ -21,6 +21,9 @@ const expenseSchema = new mongoose.Schema({
         name: String,
         price: Number
     }],
+    tickerSymbol: { type: String, default: null },
+    quantity: { type: Number, default: null },
+    purchasePrice: { type: Number, default: null },
     createdAt: { type: Date, default: Date.now }
 });
 
