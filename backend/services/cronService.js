@@ -52,34 +52,48 @@ export const evaluateRecurringExpenses = async (userId) => {
 
         for (const recurring of dueExpenses) {
             try {
-                // Create the expense
-                const expense = new Expense({
+                const dueDate = new Date(recurring.nextBillingDate);
+                const notesStr = `[Auto-Added] ${recurring.type}: ${recurring.name}`;
+
+                // Idempotency check: verify if we already created an expense for this due date
+                const existingExpense = await Expense.findOne({
                     userId: recurring.userId,
-                    amount: recurring.amount,
-                    currency: recurring.currency,
-                    category: recurring.category,
-                    date: recurring.nextBillingDate, // Date it was actually due
-                    notes: `[Auto-Added] ${recurring.type}: ${recurring.name}`,
-                    sourceAssetId: recurring.sourceAssetId || undefined
+                    notes: notesStr,
+                    date: dueDate
                 });
 
-                // Deduct from asset if preferred asset is set
-                if (recurring.sourceAssetId) {
-                    const asset = await Asset.findOne({ _id: recurring.sourceAssetId, userId: recurring.userId });
-                    if (asset) {
-                        const amountToDeduct = await convertAmount(recurring.amount, recurring.currency, asset.currency);
-                        asset.value -= amountToDeduct;
-                        await asset.save();
+                if (!existingExpense) {
+                    // Create the expense
+                    const expense = new Expense({
+                        userId: recurring.userId,
+                        amount: recurring.amount,
+                        currency: recurring.currency,
+                        category: recurring.category,
+                        date: dueDate, // Date it was actually due
+                        notes: notesStr,
+                        sourceAssetId: recurring.sourceAssetId || undefined
+                    });
+
+                    // Deduct from asset if preferred asset is set
+                    if (recurring.sourceAssetId) {
+                        const asset = await Asset.findOne({ _id: recurring.sourceAssetId, userId: recurring.userId });
+                        if (asset) {
+                            const amountToDeduct = await convertAmount(recurring.amount, recurring.currency, asset.currency);
+                            asset.value -= amountToDeduct;
+                            await asset.save();
+                        }
                     }
+
+                    await expense.save();
                 }
 
-                await expense.save();
-
                 // Advance the next billing date
-                let nextDate = new Date(recurring.nextBillingDate);
+                let nextDate = new Date(dueDate);
                 while (nextDate <= today) {
                     if (recurring.frequency === 'yearly') {
                         nextDate.setFullYear(nextDate.getFullYear() + 1);
+                    } else if (recurring.frequency === 'weekly') {
+                        nextDate.setDate(nextDate.getDate() + 7);
                     } else {
                         nextDate.setMonth(nextDate.getMonth() + 1);
                     }
@@ -103,61 +117,75 @@ export const evaluateRecurringExpenses = async (userId) => {
 
         for (const recurring of dueTransfers) {
             try {
-                const sourceAsset = await Asset.findOne({ _id: recurring.sourceAssetId, userId: recurring.userId });
-                const targetAsset = await Asset.findOne({ _id: recurring.targetAssetId, userId: recurring.userId });
+                const dueDate = new Date(recurring.nextTransferDate);
+                const descStr = `[Auto-Invest] ${recurring.description || ''}`.trim();
 
-                if (!sourceAsset || !targetAsset) {
-                    console.error(`[LazyCron] Failed to process auto-invest ${recurring._id}: Source or Target asset missing.`);
-                    continue;
-                }
-
-                // Convert amount to target currency if currencies are different
-                const converted = await convertAmount(recurring.amount, sourceAsset.currency, targetAsset.currency);
-
-                // Handle source asset (if investment)
-                if (sourceAsset.category === 'Investments' && sourceAsset.tickerSymbol) {
-                    const priceData = await fetchTickerPrice(sourceAsset.tickerSymbol);
-                    const livePrice = priceData ? priceData.price : (sourceAsset.purchasePrice || 1);
-                    const removedQty = recurring.amount / livePrice;
-                    sourceAsset.quantity = Math.max(0, (sourceAsset.quantity || 0) - removedQty);
-                }
-                sourceAsset.value -= recurring.amount;
-
-                // Handle target asset (if investment)
-                if (targetAsset.category === 'Investments' && targetAsset.tickerSymbol) {
-                    const priceData = await fetchTickerPrice(targetAsset.tickerSymbol);
-                    const livePrice = priceData ? priceData.price : (targetAsset.purchasePrice || 1);
-                    const addedQty = converted / livePrice;
-                    const oldQty = targetAsset.quantity || 0;
-                    const oldCost = targetAsset.purchasePrice || livePrice;
-                    const newQty = oldQty + addedQty;
-                    targetAsset.purchasePrice = newQty > 0 ? ((oldQty * oldCost) + converted) / newQty : oldCost;
-                    targetAsset.quantity = newQty;
-                }
-                targetAsset.value += converted;
-
-                await sourceAsset.save();
-                await targetAsset.save();
-
-                // Create transfer log
-                const transfer = new Transfer({
+                // Idempotency check
+                const existingTransfer = await Transfer.findOne({
                     userId: recurring.userId,
-                    sourceAssetId: sourceAsset._id,
-                    targetAssetId: targetAsset._id,
-                    sourceAssetName: sourceAsset.name,
-                    targetAssetName: targetAsset.name,
-                    amount: recurring.amount,
-                    sourceCurrency: sourceAsset.currency,
-                    targetCurrency: targetAsset.currency,
-                    convertedAmount: converted,
-                    date: recurring.nextTransferDate,
-                    description: `[Auto-Invest] ${recurring.description || ''}`.trim()
+                    description: descStr,
+                    date: dueDate,
+                    sourceAssetId: recurring.sourceAssetId,
+                    targetAssetId: recurring.targetAssetId
                 });
 
-                await transfer.save();
+                if (!existingTransfer) {
+                    const sourceAsset = await Asset.findOne({ _id: recurring.sourceAssetId, userId: recurring.userId });
+                    const targetAsset = await Asset.findOne({ _id: recurring.targetAssetId, userId: recurring.userId });
+
+                    if (!sourceAsset || !targetAsset) {
+                        console.error(`[LazyCron] Failed to process auto-invest ${recurring._id}: Source or Target asset missing.`);
+                        continue;
+                    }
+
+                    // Convert amount to target currency if currencies are different
+                    const converted = await convertAmount(recurring.amount, sourceAsset.currency, targetAsset.currency);
+
+                    // Handle source asset (if investment)
+                    if (sourceAsset.category === 'Investments' && sourceAsset.tickerSymbol) {
+                        const priceData = await fetchTickerPrice(sourceAsset.tickerSymbol);
+                        const livePrice = priceData ? priceData.price : (sourceAsset.purchasePrice || 1);
+                        const removedQty = recurring.amount / livePrice;
+                        sourceAsset.quantity = Math.max(0, (sourceAsset.quantity || 0) - removedQty);
+                    }
+                    sourceAsset.value -= recurring.amount;
+
+                    // Handle target asset (if investment)
+                    if (targetAsset.category === 'Investments' && targetAsset.tickerSymbol) {
+                        const priceData = await fetchTickerPrice(targetAsset.tickerSymbol);
+                        const livePrice = priceData ? priceData.price : (targetAsset.purchasePrice || 1);
+                        const addedQty = converted / livePrice;
+                        const oldQty = targetAsset.quantity || 0;
+                        const oldCost = targetAsset.purchasePrice || livePrice;
+                        const newQty = oldQty + addedQty;
+                        targetAsset.purchasePrice = newQty > 0 ? ((oldQty * oldCost) + converted) / newQty : oldCost;
+                        targetAsset.quantity = newQty;
+                    }
+                    targetAsset.value += converted;
+
+                    await sourceAsset.save();
+                    await targetAsset.save();
+
+                    // Create transfer log
+                    const transfer = new Transfer({
+                        userId: recurring.userId,
+                        sourceAssetId: sourceAsset._id,
+                        targetAssetId: targetAsset._id,
+                        sourceAssetName: sourceAsset.name,
+                        targetAssetName: targetAsset.name,
+                        amount: recurring.amount,
+                        sourceCurrency: sourceAsset.currency,
+                        targetCurrency: targetAsset.currency,
+                        convertedAmount: converted,
+                        date: dueDate,
+                        description: descStr
+                    });
+
+                    await transfer.save();
+                }
 
                 // Advance the next transfer date
-                let nextDate = new Date(recurring.nextTransferDate);
+                let nextDate = new Date(dueDate);
                 while (nextDate <= today) {
                     if (recurring.frequency === 'yearly') {
                         nextDate.setFullYear(nextDate.getFullYear() + 1);
