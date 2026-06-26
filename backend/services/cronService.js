@@ -1,3 +1,4 @@
+import mongoose from 'mongoose';
 import { RecurringExpense } from '../models/RecurringExpense.js';
 import { RecurringTransfer } from '../models/RecurringTransfer.js';
 import { Expense } from '../models/Expense.js';
@@ -5,6 +6,12 @@ import { Transfer } from '../models/Transfer.js';
 import { Asset } from '../models/Asset.js';
 import { ExchangeRate } from '../models/ExchangeRate.js';
 import { fetchTickerPrice } from '../routes/api.js';
+
+const lockSchema = new mongoose.Schema({
+    _id: String,
+    createdAt: { type: Date, expires: 86400, default: Date.now } // Auto-delete after 24h
+});
+const Lock = mongoose.models.Lock || mongoose.model('Lock', lockSchema);
 
 // Map to track the last time we checked for a user (userId -> timestamp)
 const lastCheckMap = new Map();
@@ -54,6 +61,18 @@ export const evaluateRecurringExpenses = async (userId) => {
             try {
                 const dueDate = new Date(recurring.nextBillingDate);
                 const notesStr = `[Auto-Added] ${recurring.type}: ${recurring.name}`;
+
+                // Distributed atomic lock to prevent TOCTOU race conditions across multiple instances
+                const lockId = `cron-expense-${recurring._id}-${dueDate.toISOString()}`;
+                try {
+                    await Lock.create({ _id: lockId });
+                } catch (err) {
+                    if (err.code === 11000) {
+                        console.log(`[LazyCron] Concurrency lock acquired by another process for ${lockId}, skipping.`);
+                        continue;
+                    }
+                    throw err;
+                }
 
                 // Idempotency check: verify if we already created an expense for this due date
                 const existingExpense = await Expense.findOne({
@@ -119,6 +138,18 @@ export const evaluateRecurringExpenses = async (userId) => {
             try {
                 const dueDate = new Date(recurring.nextTransferDate);
                 const descStr = `[Auto-Invest] ${recurring.description || ''}`.trim();
+
+                // Distributed atomic lock
+                const lockId = `cron-transfer-${recurring._id}-${dueDate.toISOString()}`;
+                try {
+                    await Lock.create({ _id: lockId });
+                } catch (err) {
+                    if (err.code === 11000) {
+                        console.log(`[LazyCron] Concurrency lock acquired by another process for ${lockId}, skipping.`);
+                        continue;
+                    }
+                    throw err;
+                }
 
                 // Idempotency check
                 const existingTransfer = await Transfer.findOne({
