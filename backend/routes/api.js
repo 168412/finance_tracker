@@ -447,7 +447,24 @@ router.post('/expenses', async (req, res) => {
             const asset = await Asset.findOne(assetQuery);
             if (asset) {
                 const amountToDeduct = await convertAmount(expense.amount, expense.currency, asset.currency);
-                await Asset.updateOne(assetQuery, { $inc: { value: -amountToDeduct } });
+                let updateData = { $inc: { value: -amountToDeduct } };
+                
+                if (expense.quantity) {
+                    const newQty = parseFloat(expense.quantity);
+                    const oldQty = parseFloat(asset.quantity) || 0;
+                    updateData.$inc.quantity = newQty;
+                    
+                    if (expense.purchasePrice) {
+                        const newPrice = parseFloat(expense.purchasePrice);
+                        const oldPrice = parseFloat(asset.purchasePrice) || 0;
+                        if (oldQty + newQty > 0) {
+                            if (!updateData.$set) updateData.$set = {};
+                            updateData.$set.purchasePrice = ((oldQty * oldPrice) + (newQty * newPrice)) / (oldQty + newQty);
+                        }
+                    }
+                }
+                
+                await Asset.updateOne(assetQuery, updateData);
             }
         } catch (e) {
             console.error('Failed to update asset on POST', e);
